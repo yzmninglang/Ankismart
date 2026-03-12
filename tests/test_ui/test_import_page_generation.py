@@ -4,6 +4,13 @@ from pathlib import Path
 
 from ankismart.core.config import AppConfig
 from ankismart.ui.import_page import _STRATEGY_TEMPLATE_LIBRARY, ImportPage
+from ankismart.ui.workflows import (
+    ConvertWorkflowRequest,
+    StartupPrecheckItem,
+    StartupPrecheckReport,
+    build_startup_precheck_report,
+    validate_convert_request,
+)
 
 from .import_page_test_utils import (
     DummyCombo,
@@ -260,3 +267,67 @@ def test_cloud_ocr_message_progress_updates_status_text():
 
     ImportPage._on_ocr_progress(page, "云端 OCR: 上传文件中...")
     assert "云端 OCR: 上传文件中..." in page._status_label.text
+
+
+def test_build_startup_precheck_report_marks_missing_provider() -> None:
+    report = build_startup_precheck_report(
+        AppConfig(language="zh", llm_providers=[], active_provider_id=""),
+        get_missing_ocr_models=lambda **_: [],
+    )
+
+    assert report.summary == "首次使用预检：还有 2 项待确认。"
+    assert report.items[0].key == "llm"
+    assert report.items[0].status == "warning"
+    assert "未配置 LLM 提供商" in report.items[0].detail
+
+
+def test_validate_convert_request_rejects_missing_api_key_for_non_ollama() -> None:
+    issue = validate_convert_request(
+        ConvertWorkflowRequest(
+            language="zh",
+            file_paths=(Path("a.md"),),
+            deck_name="Default",
+            strategy_mix=({"strategy": "basic", "ratio": 100},),
+            provider_name="OpenAI",
+            provider_api_key="",
+            allow_keyless_provider=False,
+        )
+    )
+
+    assert issue is not None
+    assert issue.focus_target == "provider"
+    assert "API Key" in issue.content
+
+
+def test_refresh_startup_precheck_uses_workflow_report(monkeypatch) -> None:
+    page = make_page()
+
+    class _Label:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def setText(self, text: str) -> None:  # noqa: N802
+            self.text = text
+
+    page._startup_precheck_summary_label = _Label()
+    page._startup_precheck_status_labels = {"llm": _Label()}
+
+    monkeypatch.setattr(
+        "ankismart.ui.import_page.build_startup_precheck_report",
+        lambda *_args, **_kwargs: StartupPrecheckReport(
+            summary="summary",
+            items=(
+                StartupPrecheckItem(
+                    key="llm",
+                    status="success",
+                    title="LLM",
+                    detail="ready",
+                ),
+            ),
+        ),
+    )
+
+    ImportPage._refresh_startup_precheck(page)
+
+    assert page._startup_precheck_summary_label.text == "summary"
+    assert page._startup_precheck_status_labels["llm"].text == "[OK] LLM: ready"

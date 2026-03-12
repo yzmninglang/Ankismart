@@ -59,6 +59,14 @@ from ankismart.ui.styles import (
 )
 from ankismart.ui.utils import ProgressMixin, split_tags_text
 from ankismart.ui.workers import BatchConvertWorker
+from ankismart.ui.workflows import (
+    ConvertWorkflowRequest,
+    StartupPrecheckItem,
+    StartupPrecheckReport,
+    build_startup_precheck_report,
+    format_startup_precheck_item,
+    validate_convert_request,
+)
 
 logger = get_logger(__name__)
 # Backward compatibility for tests patching ankismart.ui.import_page.QMessageBox.
@@ -775,189 +783,61 @@ class ImportPage(ProgressMixin, QWidget):
             switch()
 
     def _refresh_startup_precheck(self) -> None:
-        items = self._build_startup_precheck_items()
-        summary = self._build_startup_precheck_summary(items)
+        report = build_startup_precheck_report(
+            self._main.config,
+            get_missing_ocr_models=get_missing_ocr_models,
+            runtime_error_types=(OCRRuntimeUnavailableError,),
+        )
 
         if self._startup_precheck_summary_label is not None:
-            self._startup_precheck_summary_label.setText(summary)
+            self._startup_precheck_summary_label.setText(report.summary)
 
-        for item in items:
-            label = self._startup_precheck_status_labels.get(str(item["key"]))
+        for item in report.items:
+            label = self._startup_precheck_status_labels.get(item.key)
             if label is not None:
-                label.setText(self._format_startup_precheck_item(item))
+                label.setText(format_startup_precheck_item(item))
 
     def _build_startup_precheck_items(self) -> list[dict[str, str]]:
-        is_zh = self._main.config.language == "zh"
-        config = self._main.config
-        items: list[dict[str, str]] = []
-
-        provider = config.active_provider
-        if provider is None:
-            items.append(
-                {
-                    "key": "llm",
-                    "status": "warning",
-                    "title": "LLM",
-                    "detail": "未配置 LLM 提供商，请先在设置页添加。"
-                    if is_zh
-                    else "No LLM provider configured. Add one in Settings.",
-                }
-            )
-        elif "Ollama" not in provider.name and not provider.api_key.strip():
-            items.append(
-                {
-                    "key": "llm",
-                    "status": "warning",
-                    "title": "LLM",
-                    "detail": f"{provider.name} 缺少 API Key。"
-                    if is_zh
-                    else f"{provider.name} is missing an API key.",
-                }
-            )
-        else:
-            model_text = provider.model.strip() or ("未设置模型" if is_zh else "model not set")
-            items.append(
-                {
-                    "key": "llm",
-                    "status": "success",
-                    "title": "LLM",
-                    "detail": f"{provider.name} / {model_text}",
-                }
-            )
-
-        anki_url = str(getattr(config, "anki_connect_url", "")).strip()
-        if not anki_url:
-            items.append(
-                {
-                    "key": "anki",
-                    "status": "warning",
-                    "title": "Anki",
-                    "detail": "未配置 AnkiConnect URL。"
-                    if is_zh
-                    else "AnkiConnect URL is not configured.",
-                }
-            )
-        else:
-            items.append(
-                {
-                    "key": "anki",
-                    "status": "info",
-                    "title": "Anki",
-                    "detail": f"{anki_url}；可在设置页执行连通性测试。"
-                    if is_zh
-                    else f"{anki_url}; run connectivity test in Settings.",
-                }
-            )
-
-        ocr_mode = str(getattr(config, "ocr_mode", "local")).strip().lower()
-        if ocr_mode == "cloud":
-            endpoint = str(getattr(config, "ocr_cloud_endpoint", "")).strip()
-            api_key = str(getattr(config, "ocr_cloud_api_key", "")).strip()
-            if not endpoint or not api_key:
-                detail = "云 OCR 配置不完整，请补全 Endpoint 和 API Key。"
-                if not is_zh:
-                    detail = "Cloud OCR config is incomplete. Fill endpoint and API key."
-                items.append(
-                    {
-                        "key": "ocr",
-                        "status": "warning",
-                        "title": "OCR",
-                        "detail": detail,
-                    }
-                )
-            else:
-                items.append(
-                    {
-                        "key": "ocr",
-                        "status": "info",
-                        "title": "OCR",
-                        "detail": f"云 OCR 已配置：{endpoint}"
-                        if is_zh
-                        else f"Cloud OCR configured: {endpoint}",
-                    }
-                )
-            return items
-
-        try:
-            missing_models = get_missing_ocr_models(
-                model_tier=str(getattr(config, "ocr_model_tier", "lite")),
-                model_source=str(getattr(config, "ocr_model_source", "official")),
-            )
-        except OCRRuntimeUnavailableError:
-            items.append(
-                {
-                    "key": "ocr",
-                    "status": "warning",
-                    "title": "OCR",
-                    "detail": "当前环境未包含本地 OCR 运行时。"
-                    if is_zh
-                    else "Local OCR runtime is not bundled in this environment.",
-                }
-            )
-            return items
-        except Exception as exc:
-            items.append(
-                {
-                    "key": "ocr",
-                    "status": "info",
-                    "title": "OCR",
-                    "detail": f"OCR 状态暂无法确认：{exc}"
-                    if is_zh
-                    else f"OCR status is temporarily unavailable: {exc}",
-                }
-            )
-            return items
-
-        if missing_models:
-            missing_text = ", ".join(missing_models)
-            items.append(
-                {
-                    "key": "ocr",
-                    "status": "warning",
-                    "title": "OCR",
-                    "detail": f"缺少本地 OCR 模型：{missing_text}"
-                    if is_zh
-                    else f"Missing local OCR models: {missing_text}",
-                }
-            )
-        else:
-            items.append(
-                {
-                    "key": "ocr",
-                    "status": "success",
-                    "title": "OCR",
-                    "detail": "本地 OCR 模型已就绪。"
-                    if is_zh
-                    else "Local OCR models are ready.",
-                }
-            )
-
-        return items
+        report = build_startup_precheck_report(
+            self._main.config,
+            get_missing_ocr_models=get_missing_ocr_models,
+            runtime_error_types=(OCRRuntimeUnavailableError,),
+        )
+        return [
+            {
+                "key": item.key,
+                "status": item.status,
+                "title": item.title,
+                "detail": item.detail,
+            }
+            for item in report.items
+        ]
 
     def _build_startup_precheck_summary(self, items: list[dict[str, str]]) -> str:
-        is_zh = self._main.config.language == "zh"
-        pending_count = sum(1 for item in items if item.get("status") != "success")
+        report = StartupPrecheckReport(
+            summary="",
+            items=tuple(
+                StartupPrecheckItem(
+                    key=str(item.get("key", "")),
+                    status=str(item.get("status", "info")),
+                    title=str(item.get("title", "")),
+                    detail=str(item.get("detail", "")),
+                )
+                for item in items
+            ),
+        )
+        pending_count = sum(1 for item in report.items if item.status != "success")
         if pending_count == 0:
             return (
                 "首次使用预检已通过，可以直接开始导入。"
-                if is_zh
+                if self._main.config.language == "zh"
                 else "Preflight passed. You can start importing now."
             )
         return (
             f"首次使用预检：还有 {pending_count} 项待确认。"
-            if is_zh
+            if self._main.config.language == "zh"
             else f"Preflight: {pending_count} items still need attention."
         )
-
-    @staticmethod
-    def _format_startup_precheck_item(item: dict[str, str]) -> str:
-        status = str(item.get("status", "info"))
-        icon = {
-            "success": "OK",
-            "warning": "!",
-            "info": "...",
-        }.get(status, "-")
-        return f"[{icon}] {item.get('title', '')}: {item.get('detail', '')}"
 
     def _create_config_group(self) -> QWidget:
         """Create configuration area with custom title bar."""
@@ -1860,19 +1740,6 @@ class ImportPage(ProgressMixin, QWidget):
         """Start batch conversion and generation."""
         is_zh = self._main.config.language == "zh"
 
-        # Validation: Files
-        if not self._file_paths:
-            InfoBar.warning(
-                title=get_text("import.warning", is_zh),
-                content=get_text("import.please_select_files", is_zh),
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
-            return
-
         # Validation: Target card count
         is_valid, count_value, error_msg = self._validate_card_count(self._total_count_input.text())
         if not is_valid:
@@ -1922,6 +1789,34 @@ class ImportPage(ProgressMixin, QWidget):
                 self._deck_combo.setFocus()
             return
 
+        provider = self._main.config.active_provider
+        config = self.build_generation_config()
+        workflow_issue = validate_convert_request(
+            ConvertWorkflowRequest(
+                language=self._main.config.language,
+                file_paths=tuple(self._file_paths),
+                deck_name=deck_name,
+                strategy_mix=tuple(config["strategy_mix"]),
+                provider_name=provider.name if provider else "",
+                provider_api_key=provider.api_key if provider else "",
+                allow_keyless_provider=bool(provider and "Ollama" in provider.name),
+            )
+        )
+        if workflow_issue is not None:
+            InfoBar.warning(
+                title=workflow_issue.title,
+                content=workflow_issue.content,
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+                parent=self,
+            )
+            focus_target = workflow_issue.focus_target
+            if focus_target == "deck" and hasattr(self._deck_combo, "setFocus"):
+                self._deck_combo.setFocus()
+            return
+
         # Check OCR runtime and model availability only when OCR-required files exist
         if self._files_need_ocr():
             if not self._prepare_local_ocr_runtime():
@@ -1930,47 +1825,6 @@ class ImportPage(ProgressMixin, QWidget):
             if getattr(self._main.config, "ocr_mode", "local") != "cloud":
                 if not self._ensure_ocr_models_ready():
                     return
-
-        # Validate provider
-        provider = self._main.config.active_provider
-        if not provider:
-            InfoBar.warning(
-                title=get_text("import.warning", is_zh),
-                content=get_text("import.please_configure_provider", is_zh),
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
-            return
-
-        # Check API key (except for Ollama)
-        if "Ollama" not in provider.name and not provider.api_key.strip():
-            InfoBar.warning(
-                title=get_text("import.warning", is_zh),
-                content=get_text("import.please_configure_api_key", is_zh),
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
-            return
-
-        # Validate strategy mix
-        config = self.build_generation_config()
-        if not config["strategy_mix"]:
-            InfoBar.warning(
-                title=get_text("import.warning", is_zh),
-                content=get_text("import.please_select_strategy", is_zh),
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
-            return
 
         # Save last used values
         self._main.config.last_deck = deck_name
