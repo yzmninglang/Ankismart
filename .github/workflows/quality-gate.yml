@@ -130,6 +130,9 @@ jobs:
       - name: Verify Packaging Build (Portable + Installer)
         run: uv run --with pyinstaller==6.19.0 python packaging/build.py --clean
 
+      - name: Smoke Test Release Layout
+        run: uv run python packaging/build.py --smoke-test-only
+
       - name: Upload Packaging Artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -276,6 +276,13 @@ def verify_no_paddle_related(target_dir: Path) -> None:
         raise RuntimeError(f"检测到不应存在的 paddle 相关目录: {bad_dirs[:5]}")
 
 
+def verify_runtime_dirs(target_dir: Path) -> None:
+    required_dirs = ("config", "data", "logs", "cache")
+    missing = [name for name in required_dirs if not (target_dir / name).exists()]
+    if missing:
+        raise RuntimeError(f"运行时目录缺失: {', '.join(missing)}")
+
+
 def verify_layout(version: str) -> None:
     portable_dir = PORTABLE_ROOT / f"Ankismart-Portable-{version}"
     required = [STAGED_APP_DIR, portable_dir]
@@ -298,6 +305,14 @@ def verify_layout(version: str) -> None:
     verify_no_portable_helper_files(portable_dir)
 
 
+def smoke_test_release(version: str) -> None:
+    portable_dir = PORTABLE_ROOT / f"Ankismart-Portable-{version}"
+    verify_layout(version)
+    verify_runtime_dirs(STAGED_APP_DIR)
+    verify_runtime_dirs(portable_dir)
+    _print(f"Smoke test passed for release {version}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="构建 Ankismart 安装版 + 便携版（不含 OCR 模型）")
     parser.add_argument("--clean", action="store_true", help="构建前清理 build/dist")
@@ -307,13 +322,26 @@ def main() -> int:
         default=str(SCRIPT_DIR / "ankismart.spec"),
         help="PyInstaller spec 文件",
     )
+    parser.add_argument(
+        "--smoke-test-only",
+        action="store_true",
+        help="只验证现有发布目录，不执行构建",
+    )
+    parser.add_argument(
+        "--version",
+        default="",
+        help="与 --smoke-test-only 搭配使用，指定要校验的版本号",
+    )
     args = parser.parse_args()
+    version = args.version.strip() or read_version(PROJECT_ROOT / "pyproject.toml")
+    _print(f"版本: {version}")
+
+    if args.smoke_test_only:
+        smoke_test_release(version)
+        return 0
 
     if args.clean:
         clean()
-
-    version = read_version(PROJECT_ROOT / "pyproject.toml")
-    _print(f"版本: {version}")
 
     spec_path = Path(args.spec)
     if not spec_path.is_absolute():
@@ -324,7 +352,7 @@ def main() -> int:
     portable_dir = create_portable_package(version)
     installer_file = None if args.skip_installer else create_installer(version)
 
-    verify_layout(version)
+    smoke_test_release(version)
 
     _print("构建完成")
     _print(f"应用分发目录: {STAGED_APP_DIR}")
