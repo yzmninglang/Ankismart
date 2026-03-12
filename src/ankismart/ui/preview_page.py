@@ -22,7 +22,7 @@ from qfluentwidgets import (
 
 from ankismart.anki_gateway.client import AnkiConnectClient
 from ankismart.anki_gateway.gateway import AnkiGateway
-from ankismart.core.config import append_task_history, save_config
+from ankismart.core.config import append_task_history, record_operation_metric, save_config
 from ankismart.core.errors import ErrorCode
 from ankismart.core.logging import get_logger
 from ankismart.core.models import BatchConvertResult, ConvertedDocument
@@ -36,7 +36,7 @@ from ankismart.ui.styles import (
     get_list_widget_palette,
     scale_px,
 )
-from ankismart.ui.utils import ProgressMixin, split_tags_text
+from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_text
 from ankismart.ui.workers import BatchGenerateWorker, PushWorker
 
 if TYPE_CHECKING:
@@ -198,6 +198,11 @@ class PreviewPage(ProgressMixin, QWidget):
 
         layout.addLayout(title_bar)
 
+        self._performance_hint_label = BodyLabel()
+        self._performance_hint_label.setWordWrap(True)
+        self._refresh_generation_hint()
+        layout.addWidget(self._performance_hint_label)
+
         # Main content area
         content_layout = QHBoxLayout()
         content_layout.setSpacing(MARGIN_SMALL)
@@ -237,6 +242,15 @@ class PreviewPage(ProgressMixin, QWidget):
         layout.addWidget(self._progress_bar)
 
         self._apply_theme_styles()
+
+    def _refresh_generation_hint(self) -> None:
+        self._performance_hint_label.setText(
+            format_operation_hint(
+                self._main.config,
+                event="generate",
+                language=self._main.config.language,
+            )
+        )
 
     def _apply_theme_styles(self) -> None:
         """Apply theme-aware styles for Qt widgets in preview page."""
@@ -1195,7 +1209,15 @@ class PreviewPage(ProgressMixin, QWidget):
                 "duration_seconds": round(elapsed, 2),
             },
         )
+        record_operation_metric(
+            self._main.config,
+            event="generate",
+            duration_seconds=elapsed,
+            success=status != "failed",
+            error_code="partial" if status == "partial" else "",
+        )
         save_config(self._main.config)
+        self._refresh_generation_hint()
 
         InfoBar.success(
             title="制卡完成" if is_zh else "Generation Complete",
@@ -1281,7 +1303,15 @@ class PreviewPage(ProgressMixin, QWidget):
             summary=f"生成失败: {error}",
             payload={"duration_seconds": round(elapsed, 2)},
         )
+        record_operation_metric(
+            self._main.config,
+            event="generate",
+            duration_seconds=elapsed,
+            success=False,
+            error_code="failed",
+        )
         save_config(self._main.config)
+        self._refresh_generation_hint()
 
     def _on_generation_cancelled(self):
         """Handle generation cancellation."""
@@ -1317,7 +1347,15 @@ class PreviewPage(ProgressMixin, QWidget):
             summary="用户取消卡片生成",
             payload={"duration_seconds": round(elapsed, 2)},
         )
+        record_operation_metric(
+            self._main.config,
+            event="generate",
+            duration_seconds=elapsed,
+            success=False,
+            error_code="cancelled",
+        )
         save_config(self._main.config)
+        self._refresh_generation_hint()
 
     def _cancel_generation(self):
         """Cancel the current generation operation."""
@@ -1485,6 +1523,7 @@ class PreviewPage(ProgressMixin, QWidget):
         self._editor.setPlaceholderText(
             "在此编辑 Markdown 内容..." if is_zh else "Edit Markdown content here..."
         )
+        self._refresh_generation_hint()
 
     def update_theme(self):
         """Update theme-dependent components when theme changes."""

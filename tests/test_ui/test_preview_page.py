@@ -244,6 +244,25 @@ class TestPreviewPageFlow:
 
         main.switch_to_result.assert_not_called()
 
+    def test_refresh_generation_hint_uses_metrics(self):
+        main = _make_main_window()
+        main.config.language = "zh"
+        main.config.ops_generation_durations = [9.0, 15.0]
+        main.config.task_history = [
+            {
+                "event": "batch_generate",
+                "status": "success",
+                "summary": "生成 12 张卡片",
+                "payload": {"duration_seconds": 15.0},
+            }
+        ]
+        page = PreviewPage(main)
+
+        page._refresh_generation_hint()
+
+        assert "最近生成 15.0 秒" in page._performance_hint_label.text()
+        assert "P50 12.0 秒" in page._performance_hint_label.text()
+
 
 class TestPreviewPageWorkerCleanup:
     def test_cleanup_generate_worker_keeps_reference_when_running(self):

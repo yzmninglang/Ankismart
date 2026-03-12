@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ankismart.core.config import AppConfig
 from ankismart.ui.import_page import _STRATEGY_TEMPLATE_LIBRARY, ImportPage
+from ankismart.ui.utils import format_operation_hint
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
     StartupPrecheckItem,
@@ -331,3 +332,48 @@ def test_refresh_startup_precheck_uses_workflow_report(monkeypatch) -> None:
 
     assert page._startup_precheck_summary_label.text == "summary"
     assert page._startup_precheck_status_labels["llm"].text == "[OK] LLM: ready"
+
+
+def test_format_operation_hint_includes_last_and_median() -> None:
+    config = AppConfig(language="zh")
+    config.ops_conversion_durations = [6.0, 10.0, 14.0]
+    config.task_history = [
+        {
+            "event": "batch_convert",
+            "status": "success",
+            "summary": "转换 3/3，失败 0",
+            "payload": {"duration_seconds": 14.0},
+        }
+    ]
+
+    text = format_operation_hint(config, event="convert", language="zh")
+
+    assert "最近转换 14.0 秒" in text
+    assert "P50 10.0 秒" in text
+
+
+def test_import_page_refresh_conversion_hint_uses_metrics() -> None:
+    page = make_page()
+
+    class _Label:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def setText(self, text: str) -> None:  # noqa: N802
+            self.text = text
+
+    page._performance_hint_label = _Label()
+    page._main.config.ops_conversion_durations = [8.0, 12.0]
+    page._main.config.task_history = [
+        {
+            "event": "batch_convert",
+            "status": "success",
+            "summary": "转换 1/1，失败 0",
+            "payload": {"duration_seconds": 12.0},
+        }
+    ]
+
+    ImportPage._refresh_conversion_hint(page)
+
+    assert "最近转换 12.0 秒" in page._performance_hint_label.text
+    assert "P50 10.0 秒" in page._performance_hint_label.text
