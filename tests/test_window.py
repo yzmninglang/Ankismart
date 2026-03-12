@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig
 from ankismart.ui.main_window import MainWindow
+from tests.e2e.conftest import _configure_test_qapp, _teardown_test_window
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -129,3 +130,25 @@ def test_app_write_crash_report_creates_log(tmp_path, monkeypatch) -> None:
     assert path.exists()
     assert "RuntimeError: boom" in content
     assert "Traceback:" in content
+
+
+def test_e2e_qapp_configuration_disables_quit_on_last_window_closed() -> None:
+    app = _get_app()
+
+    _configure_test_qapp(app)
+
+    assert app.quitOnLastWindowClosed() is False
+
+
+def test_e2e_window_teardown_closes_window_cleanly(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+
+    app = _get_app()
+    _configure_test_qapp(app)
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+    window.show()
+    app.processEvents()
+
+    _teardown_test_window(window, app)
+
+    assert window.isVisible() is False

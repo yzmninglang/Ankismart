@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
+from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig, LLMProviderConfig
@@ -19,6 +20,20 @@ from ankismart.core.models import (
 from ankismart.ui.main_window import MainWindow
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+def _configure_test_qapp(app: QApplication) -> QApplication:
+    app.setQuitOnLastWindowClosed(False)
+    return app
+
+
+def _teardown_test_window(window: MainWindow, app: QApplication) -> None:
+    window.hide()
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, 0)
+    app.processEvents()
 
 
 class _SignalStub:
@@ -61,7 +76,13 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+    app = _configure_test_qapp(app)
+    yield app
+    app.closeAllWindows()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, 0)
+    app.processEvents()
+    app.quit()
 
 
 @pytest.fixture(autouse=True)
@@ -161,8 +182,7 @@ def window(monkeypatch, qapp: QApplication, e2e_config: AppConfig):
     app_window.show()
     qapp.processEvents()
     yield app_window
-    app_window.close()
-    qapp.processEvents()
+    _teardown_test_window(app_window, qapp)
 
 
 def _resolve_source_format(file_path: Path) -> str:
