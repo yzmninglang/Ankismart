@@ -111,11 +111,28 @@ def test_other_group_stays_at_bottom(_qapp) -> None:
         page._llm_group,
         page._anki_group,
         page._ocr_group,
+        page._network_group,
         page._cache_group,
         page._experimental_group,
     ]
     max_other_y = max(group.y() for group in groups)
     assert page._other_group.y() > max_other_y
+
+
+def test_settings_page_exposes_overview_and_anchor_bar(_qapp) -> None:
+    main, _ = make_main()
+    page = SettingsPage(main)
+
+    assert page._overview_card is not None
+    assert page._anchor_bar is not None
+    assert list(page._section_anchor_buttons) == [
+        "llm",
+        "anki",
+        "ocr",
+        "network",
+        "cache",
+        "maintenance",
+    ]
 
 
 def test_scroll_step_is_tuned_for_faster_following(_qapp) -> None:

@@ -135,7 +135,8 @@ def test_ocr_cloud_mode_collapses_group_gap_to_cache(_qapp) -> None:
         assert card.maximumHeight() == 0
     for card in cloud_cards:
         assert card.maximumHeight() > 0
-    assert page._cache_group.y() - (page._ocr_group.y() + page._ocr_group.height()) <= 12
+    assert page._network_group.y() - (page._ocr_group.y() + page._ocr_group.height()) <= 20
+    assert page._cache_group.y() > page._network_group.y()
 
 
 def test_save_config_persists_ocr_settings(_qapp, monkeypatch) -> None:
@@ -275,3 +276,30 @@ def test_save_config_persists_adaptive_concurrency_and_update_flags(_qapp, monke
     assert captured["cfg"].llm_concurrency_max == 4
     assert captured["cfg"].llm_adaptive_concurrency is False
     assert captured["cfg"].auto_check_updates is False
+
+
+def test_overview_reflects_current_config_summary(_qapp) -> None:
+    provider = LLMProviderConfig(
+        id="p1",
+        name="OpenAI",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o",
+    )
+    cfg = AppConfig(
+        llm_providers=[provider],
+        active_provider_id="p1",
+        anki_connect_url="http://127.0.0.1:8765",
+        ocr_mode="cloud",
+        proxy_mode="manual",
+        proxy_url="http://127.0.0.1:7890",
+    )
+    main, _ = make_main(cfg)
+    page = SettingsPage(main)
+
+    assert "OpenAI" in page._overview_provider_value.text()
+    assert "127.0.0.1:8765" in page._overview_anki_value.text()
+    assert ("云" in page._overview_ocr_value.text()) or ("Cloud" in page._overview_ocr_value.text())
+    assert ("手动" in page._overview_proxy_value.text()) or (
+        "Manual" in page._overview_proxy_value.text()
+    )
