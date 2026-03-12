@@ -66,10 +66,6 @@ from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_
 from ankismart.ui.workers import BatchConvertWorker
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
-    StartupPrecheckItem,
-    StartupPrecheckReport,
-    build_startup_precheck_report,
-    format_startup_precheck_item,
     validate_convert_request,
 )
 
@@ -559,8 +555,6 @@ class ImportPage(ProgressMixin, QWidget):
         self._last_ocr_page_status_message: str = ""
         self._last_convert_ocr_message: str = ""
         self._convert_start_ts: float = 0.0
-        self._startup_precheck_summary_label: BodyLabel | None = None
-        self._startup_precheck_status_labels: dict[str, BodyLabel] = {}
 
         # Lazy-loaded heavy dependencies
         self._converter = None
@@ -718,9 +712,6 @@ class ImportPage(ProgressMixin, QWidget):
         self.expand_layout.setContentsMargins(0, 0, 0, 0)
         self.expand_layout.setSpacing(SPACING_MEDIUM)
 
-        precheck_card = self._create_startup_precheck_card()
-        self.expand_layout.addWidget(precheck_card)
-
         # Configuration area (without LLM provider)
         config_group = self._create_config_group()
         self.expand_layout.addWidget(config_group)
@@ -736,112 +727,6 @@ class ImportPage(ProgressMixin, QWidget):
         self.expand_layout.addStretch(1)
 
         return scroll
-
-    def _create_startup_precheck_card(self) -> QWidget:
-        """Create a lightweight preflight card for first-run setup guidance."""
-        is_zh = self._main.config.language == "zh"
-
-        card = SimpleCardWidget()
-        card.setBorderRadius(8)
-
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(
-            MARGIN_STANDARD, MARGIN_STANDARD, MARGIN_STANDARD, MARGIN_STANDARD
-        )
-        layout.setSpacing(SPACING_SMALL)
-
-        title_label = SubtitleLabel("首次使用预检" if is_zh else "First-Run Precheck")
-        layout.addWidget(title_label)
-
-        self._startup_precheck_summary_label = BodyLabel("")
-        self._startup_precheck_summary_label.setWordWrap(True)
-        layout.addWidget(self._startup_precheck_summary_label)
-
-        for key in ("llm", "anki", "ocr"):
-            label = BodyLabel("")
-            label.setWordWrap(True)
-            self._startup_precheck_status_labels[key] = label
-            layout.addWidget(label)
-
-        button_row = QHBoxLayout()
-        button_row.setSpacing(SPACING_SMALL)
-
-        refresh_btn = PushButton("刷新检查" if is_zh else "Refresh")
-        refresh_btn.setIcon(FluentIcon.SYNC)
-        refresh_btn.clicked.connect(self._refresh_startup_precheck)
-        button_row.addWidget(refresh_btn)
-
-        settings_btn = PushButton("打开设置" if is_zh else "Open Settings")
-        settings_btn.setIcon(FluentIcon.SETTING)
-        settings_btn.clicked.connect(self._open_settings_from_precheck)
-        button_row.addWidget(settings_btn)
-        button_row.addStretch(1)
-
-        layout.addLayout(button_row)
-        self._refresh_startup_precheck()
-        return card
-
-    def _open_settings_from_precheck(self) -> None:
-        switch = getattr(self._main, "switch_to_settings", None)
-        if callable(switch):
-            switch()
-
-    def _refresh_startup_precheck(self) -> None:
-        report = build_startup_precheck_report(
-            self._main.config,
-            get_missing_ocr_models=get_missing_ocr_models,
-            runtime_error_types=(OCRRuntimeUnavailableError,),
-        )
-
-        if self._startup_precheck_summary_label is not None:
-            self._startup_precheck_summary_label.setText(report.summary)
-
-        for item in report.items:
-            label = self._startup_precheck_status_labels.get(item.key)
-            if label is not None:
-                label.setText(format_startup_precheck_item(item))
-
-    def _build_startup_precheck_items(self) -> list[dict[str, str]]:
-        report = build_startup_precheck_report(
-            self._main.config,
-            get_missing_ocr_models=get_missing_ocr_models,
-            runtime_error_types=(OCRRuntimeUnavailableError,),
-        )
-        return [
-            {
-                "key": item.key,
-                "status": item.status,
-                "title": item.title,
-                "detail": item.detail,
-            }
-            for item in report.items
-        ]
-
-    def _build_startup_precheck_summary(self, items: list[dict[str, str]]) -> str:
-        report = StartupPrecheckReport(
-            summary="",
-            items=tuple(
-                StartupPrecheckItem(
-                    key=str(item.get("key", "")),
-                    status=str(item.get("status", "info")),
-                    title=str(item.get("title", "")),
-                    detail=str(item.get("detail", "")),
-                )
-                for item in items
-            ),
-        )
-        pending_count = sum(1 for item in report.items if item.status == "warning")
-        if pending_count == 0:
-            return (
-                "首次使用预检已通过，可以直接开始导入。"
-                if self._main.config.language == "zh"
-                else "Preflight passed. You can start importing now."
-            )
-        return (
-            f"首次使用预检：还有 {pending_count} 项待确认。"
-            if self._main.config.language == "zh"
-            else f"Preflight: {pending_count} items still need attention."
-        )
 
     @staticmethod
     def _get_start_convert_text(language: str) -> str:
@@ -2889,8 +2774,6 @@ class ImportPage(ProgressMixin, QWidget):
                 self._strategy_template_combo.setCurrentIndex(0)
             self._strategy_template_combo.blockSignals(False)
 
-        if self._startup_precheck_summary_label is not None:
-            self._refresh_startup_precheck()
         self._refresh_conversion_hint()
 
     def update_theme(self):

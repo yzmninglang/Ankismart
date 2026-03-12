@@ -7,8 +7,6 @@ from ankismart.ui.import_page import _STRATEGY_TEMPLATE_LIBRARY, ImportPage
 from ankismart.ui.utils import format_operation_hint
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
-    StartupPrecheckItem,
-    StartupPrecheckReport,
     build_startup_precheck_report,
     validate_convert_request,
 )
@@ -323,40 +321,6 @@ def test_validate_convert_request_rejects_missing_api_key_for_non_ollama() -> No
     assert issue is not None
     assert issue.focus_target == "provider"
     assert "API Key" in issue.content
-
-
-def test_refresh_startup_precheck_uses_workflow_report(monkeypatch) -> None:
-    page = make_page()
-
-    class _Label:
-        def __init__(self) -> None:
-            self.text = ""
-
-        def setText(self, text: str) -> None:  # noqa: N802
-            self.text = text
-
-    page._startup_precheck_summary_label = _Label()
-    page._startup_precheck_status_labels = {"llm": _Label()}
-
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.build_startup_precheck_report",
-        lambda *_args, **_kwargs: StartupPrecheckReport(
-            summary="summary",
-            items=(
-                StartupPrecheckItem(
-                    key="llm",
-                    status="success",
-                    title="LLM",
-                    detail="ready",
-                ),
-            ),
-        ),
-    )
-
-    ImportPage._refresh_startup_precheck(page)
-
-    assert page._startup_precheck_summary_label.text == "summary"
-    assert page._startup_precheck_status_labels["llm"].text == "[OK] LLM: ready"
 
 
 def test_format_operation_hint_includes_last_and_median() -> None:

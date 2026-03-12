@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from PyQt6.QtWidgets import QApplication, QWidget
+
 from ankismart.core.config import AppConfig, LLMProviderConfig
 from ankismart.ui import import_page
 from ankismart.ui.import_page import ImportPage
@@ -14,6 +16,8 @@ from .import_page_test_utils import (
     make_warning_box_collector,
     patch_infobar,
 )
+
+_APP = QApplication.instance() or QApplication([])
 
 
 def test_start_convert_uses_batch_worker(monkeypatch):
@@ -327,54 +331,16 @@ def test_on_page_progress_shows_file_page_infobar_and_deduplicates(monkeypatch):
     assert infobar_calls["info"][0]["content"] == "讲义.pdf 3/12"
 
 
-def test_build_startup_precheck_items_reports_missing_provider_key(monkeypatch):
+def test_create_right_panel_does_not_include_startup_precheck_card():
     page = make_page()
-    page._main.config = AppConfig(
-        llm_providers=[LLMProviderConfig(id="p1", name="OpenAI", api_key="", model="gpt-4o")],
-        active_provider_id="p1",
-    )
+    page._create_config_group = lambda: QWidget()
+    page._create_strategy_group = lambda: QWidget()
+    page._create_progress_display = lambda: QWidget()
 
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.get_missing_ocr_models",
-        lambda **kwargs: [],
-    )
+    right_panel = ImportPage._create_right_panel(page)
 
-    items = ImportPage._build_startup_precheck_items(page)
-
-    assert items[0]["key"] == "llm"
-    assert items[0]["status"] == "warning"
-    assert "API Key" in items[0]["detail"]
-
-
-def test_build_startup_precheck_items_reports_missing_local_ocr_models(monkeypatch):
-    page = make_page()
-
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.get_missing_ocr_models",
-        lambda **kwargs: ["det", "rec"],
-    )
-
-    items = ImportPage._build_startup_precheck_items(page)
-
-    ocr_item = next(item for item in items if item["key"] == "ocr")
-    assert ocr_item["status"] == "warning"
-    assert "det, rec" in ocr_item["detail"]
-
-
-def test_build_startup_precheck_summary_counts_pending_items() -> None:
-    page = make_page()
-
-    summary = ImportPage._build_startup_precheck_summary(
-        page,
-        [
-            {"key": "llm", "status": "success", "title": "", "detail": ""},
-            {"key": "anki", "status": "info", "title": "", "detail": ""},
-            {"key": "ocr", "status": "warning", "title": "", "detail": ""},
-        ],
-    )
-
-    assert "1" in summary
-    assert ("预检" in summary) or ("preflight" in summary.lower())
+    assert right_panel is not None
+    assert page.expand_layout.count() == 4
 
 
 def test_start_generate_cards_delegates_to_convert_without_auto_generate_flag(monkeypatch):
