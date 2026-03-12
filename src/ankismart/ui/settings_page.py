@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QMessageBox,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -472,6 +473,11 @@ class SettingsPage(ScrollArea):
         )
         self._provider_summary_panel = QWidget(card)
         self._provider_summary_panel.setObjectName("providerSummaryPanel")
+        self._provider_summary_panel.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._provider_summary_panel.setMaximumWidth(280)
         summary_layout = QVBoxLayout(self._provider_summary_panel)
         summary_layout.setContentsMargins(12, 10, 12, 10)
         summary_layout.setSpacing(2)
@@ -485,7 +491,7 @@ class SettingsPage(ScrollArea):
         summary_layout.addWidget(self._provider_summary_name_label)
         summary_layout.addWidget(self._provider_summary_meta_label)
 
-        card.hBoxLayout.addWidget(self._provider_summary_panel, 1, Qt.AlignmentFlag.AlignRight)
+        card.hBoxLayout.addWidget(self._provider_summary_panel, 0, Qt.AlignmentFlag.AlignRight)
         card.hBoxLayout.addSpacing(16)
         return card
 

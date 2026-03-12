@@ -34,6 +34,16 @@ def test_provider_summary_panel_uses_theme_neutral_style(_qapp) -> None:
     assert "#FFFFFF" not in style
 
 
+def test_provider_summary_panel_prefers_compact_width(_qapp) -> None:
+    main, _ = make_main()
+    page = SettingsPage(main)
+
+    policy = page._provider_summary_panel.sizePolicy()
+
+    assert policy.horizontalPolicy() == policy.Policy.Fixed
+    assert page._provider_summary_panel.maximumWidth() == 280
+
+
 def test_provider_summary_displays_active_provider_fields(_qapp) -> None:
     providers = [
         LLMProviderConfig(
