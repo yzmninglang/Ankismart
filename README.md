@@ -122,6 +122,14 @@ uv run python -m ankismart.ui.app
 uv run python packaging/build.py --clean
 ```
 
+GitHub Actions 已配置自动构建 Windows 两种安装包：
+
+- `Build Packages`：在 `main` 分支 push、`v*` tag push、手动触发时自动构建
+- 产物包含：
+  - 便携版：`dist/release/portable/*.zip`
+  - 安装版：`dist/release/installer/*.exe`
+- tag 触发时会自动把这两种安装包附加到 GitHub Release
+
 仅构建应用目录和便携版：
 
 ```bash

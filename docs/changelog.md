@@ -2,6 +2,14 @@
 
 本文档记录 Ankismart 项目的主要功能变更和版本历史。
 
+## [v0.1.5] - 2026-03-12
+
+### 变更
+
+- ✅ 新增独立 `Build Packages` GitHub Actions 工作流，自动构建 Windows 便携版与安装版。
+- ✅ 支持在 `main` push、`v*` tag push 和手动触发时上传两种安装包产物。
+- ✅ `v*` 标签触发时自动创建或更新 GitHub Release，并附加构建好的安装包。
+
 ## [v0.1.4] - 2026-03-12
 
 ### 变更

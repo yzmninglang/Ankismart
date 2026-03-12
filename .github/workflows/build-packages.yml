@@ -1,0 +1,97 @@
+name: Build Packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: build-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-packages:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies
+        run: uv sync --group dev
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $isccX86 = "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          $isccX64 = "C:/Program Files/Inno Setup 6/ISCC.exe"
+          $isccLocal = "$env:LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe"
+          if ((Test-Path $isccX86) -or (Test-Path $isccX64) -or (Test-Path $isccLocal)) {
+            Write-Host "Inno Setup already installed."
+          } else {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Verify Inno Setup Path
+        run: >
+          uv run python -c
+          "import importlib.util,pathlib,sys;
+          p=pathlib.Path('packaging/build.py').resolve();
+          spec=importlib.util.spec_from_file_location('ankibuild', p);
+          m=importlib.util.module_from_spec(spec);
+          spec.loader.exec_module(m);
+          iscc=m.resolve_iscc();
+          print(iscc or 'ISCC_NOT_FOUND');
+          sys.exit(0 if iscc else 1)"
+
+      - name: Build Portable + Installer Packages
+        run: uv run --with pyinstaller==6.19.0 python packaging/build.py --clean
+
+      - name: Smoke Test Release Layout
+        run: uv run python packaging/build.py --smoke-test-only
+
+      - name: Read Version
+        id: version
+        shell: powershell
+        run: |
+          $version = uv run python -c "import tomllib, pathlib; data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8')); print(data['project']['version'])"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "artifact_name=ankismart-windows-packages-$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload Windows Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact_name }}
+          path: |
+            dist/release/portable/*.zip
+            dist/release/installer/*.exe
+            build/ankismart/warn-ankismart.txt
+          if-no-files-found: error
+
+      - name: Publish Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/release/portable/*.zip
+            dist/release/installer/*.exe
