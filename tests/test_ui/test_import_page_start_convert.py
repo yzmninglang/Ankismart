@@ -340,7 +340,13 @@ def test_create_right_panel_does_not_include_startup_precheck_card():
     right_panel = ImportPage._create_right_panel(page)
 
     assert right_panel is not None
-    assert page.expand_layout.count() == 4
+    assert not hasattr(ImportPage, "_create_startup_precheck_card")
+    widget_count = sum(
+        1
+        for index in range(page.expand_layout.count())
+        if page.expand_layout.itemAt(index).widget()
+    )
+    assert widget_count == 3
 
 
 def test_start_generate_cards_delegates_to_convert_without_auto_generate_flag(monkeypatch):

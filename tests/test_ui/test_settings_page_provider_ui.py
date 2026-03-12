@@ -185,3 +185,54 @@ def test_provider_group_action_buttons_match_active_state(_qapp) -> None:
 
     assert type(inactive_btn) is PushButton
     assert inactive_btn.text() == "激活"
+
+
+def test_activate_provider_refreshes_summary_and_action_widgets(_qapp, monkeypatch) -> None:
+    providers = [
+        LLMProviderConfig(
+            id="p1",
+            name="OpenAI",
+            api_key="k1",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4o",
+        ),
+        LLMProviderConfig(
+            id="p2",
+            name="DeepSeek",
+            api_key="k2",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+        ),
+    ]
+    page = _build_settings_page_with_providers(_qapp, providers, active_provider_id="p1")
+    monkeypatch.setattr(page, "_save_config_silent", lambda **kwargs: None)
+
+    page._activate_provider(page._providers[1])
+
+    assert page._provider_summary_name_label.text() == "DeepSeek"
+    p2_activate_btn = page._provider_action_widgets["p2"].layout().itemAt(0).widget()
+    p1_activate_btn = page._provider_action_widgets["p1"].layout().itemAt(0).widget()
+    assert isinstance(p2_activate_btn, PrimaryPushButton)
+    assert type(p1_activate_btn) is PushButton
+
+
+def test_save_first_provider_refreshes_summary_and_group_list(_qapp, monkeypatch) -> None:
+    cfg = AppConfig(llm_providers=[], active_provider_id="")
+    main, _ = make_main(cfg)
+    page = SettingsPage(main)
+    monkeypatch.setattr(page, "_save_config_silent", lambda **kwargs: None)
+
+    provider = LLMProviderConfig(
+        id="p1",
+        name="OpenAI",
+        api_key="test-key-1234",
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o",
+    )
+
+    page._on_provider_saved(provider)
+
+    assert page._provider_summary_name_label.text() == "OpenAI"
+    assert list(page._provider_group_widgets) == ["p1"]
+    activate_btn = page._provider_action_widgets["p1"].layout().itemAt(0).widget()
+    assert isinstance(activate_btn, PrimaryPushButton)
