@@ -199,3 +199,63 @@ def test_card_preview_low_quality_filter_only_keeps_low_cards() -> None:
     assert len(page._filtered_cards) == 1
     assert page._filtered_cards[0] is low
     assert "低分 1/2" in page._quality_overview_label.text()
+
+
+def test_card_preview_duplicate_risk_filter_only_keeps_risky_cards() -> None:
+    main = _make_card_preview_main()
+    page = CardPreviewPage(main)
+    risky_a = CardDraft(
+        note_type="Basic",
+        fields={
+            "Front": "什么是布隆过滤器的核心思想？",
+            "Back": "通过位数组和多个哈希函数做概率判重。",
+        },
+    )
+    risky_b = CardDraft(
+        note_type="Basic",
+        fields={
+            "Front": "什么是布隆过滤器的核心思想",
+            "Back": "利用位数组与多个哈希函数实现概率判重。",
+        },
+    )
+    safe = CardDraft(
+        note_type="Basic",
+        fields={
+            "Front": "解释 CAP 定理中的一致性含义",
+            "Back": "同一时刻所有节点看到相同数据视图。",
+        },
+    )
+
+    page.load_cards([risky_a, risky_b, safe])
+    assert len(page._filtered_cards) == 3
+
+    page._on_toggle_duplicate_risk_filter(True)
+
+    assert page._filtered_cards == [risky_a, risky_b]
+    assert "近重复 2/3" in page._quality_overview_label.text()
+
+
+def test_card_preview_list_marks_low_quality_and_duplicate_risk() -> None:
+    main = _make_card_preview_main()
+    page = CardPreviewPage(main)
+    low = CardDraft(note_type="Basic", fields={"Front": "Q", "Back": "A"})
+    risky = CardDraft(
+        note_type="Basic",
+        fields={
+            "Front": "解释消息队列削峰填谷的典型场景",
+            "Back": "通过异步缓冲平滑突发流量。",
+        },
+    )
+    risky_copy = CardDraft(
+        note_type="Basic",
+        fields={
+            "Front": "解释消息队列削峰填谷的典型场景。",
+            "Back": "通过异步缓冲来平滑系统突发流量。",
+        },
+    )
+
+    page.load_cards([low, risky, risky_copy])
+
+    assert "[低分]" in page._card_list.item(0).text()
+    assert "[近重复]" in page._card_list.item(1).text()
+    assert "[近重复]" in page._card_list.item(2).text()

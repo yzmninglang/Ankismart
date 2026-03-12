@@ -728,6 +728,8 @@ class CardPreviewPage(QWidget):
         self._filtered_cards: list[CardDraft] = []
         self._current_index = -1
         self._quality_low_only = False
+        self._duplicate_risk_only = False
+        self._duplicate_risk_card_ids: set[int] = set()
         self._push_worker = None
         self._export_worker = None
         self._push_start_ts = 0.0
@@ -825,6 +827,13 @@ class CardPreviewPage(QWidget):
         self._btn_low_quality.setCheckable(True)
         self._btn_low_quality.clicked.connect(self._on_toggle_low_quality_filter)
         layout.addWidget(self._btn_low_quality, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._btn_duplicate_risk = PushButton(
+            "仅近重复" if self._main.config.language == "zh" else "Near Duplicates"
+        )
+        self._btn_duplicate_risk.setCheckable(True)
+        self._btn_duplicate_risk.clicked.connect(self._on_toggle_duplicate_risk_filter)
+        layout.addWidget(self._btn_duplicate_risk, 0, Qt.AlignmentFlag.AlignVCenter)
 
         return layout
 
@@ -956,6 +965,7 @@ class CardPreviewPage(QWidget):
     def load_cards(self, cards: list[CardDraft]):
         """Load cards for preview."""
         self._all_cards = cards
+        self._rebuild_duplicate_risk_cache()
         self._apply_filters()
         if self._filtered_cards:
             self._show_card(0)
@@ -1005,6 +1015,9 @@ class CardPreviewPage(QWidget):
         if self._quality_low_only:
             filtered = [c for c in filtered if self._compute_card_quality_score(c) < 60]
 
+        if self._duplicate_risk_only:
+            filtered = [c for c in filtered if self._is_duplicate_risk_card(c)]
+
         self._filtered_cards = filtered
         self._refresh_card_list()
 
@@ -1013,7 +1026,7 @@ class CardPreviewPage(QWidget):
         self._card_list.clear()
 
         for card in self._filtered_cards:
-            question = self._get_card_question_text(card)
+            question = self._build_card_list_item_text(card)
             item = QListWidgetItem(question)
             self._card_list.addItem(item)
 
@@ -1080,15 +1093,25 @@ class CardPreviewPage(QWidget):
         scores = [self._compute_card_quality_score(card) for card in self._all_cards]
         avg = sum(scores) / max(1, len(scores))
         low = sum(1 for score in scores if score < 60)
+        duplicate_risk = len(self._duplicate_risk_card_ids)
         if is_zh:
-            self._quality_overview_label.setText(f"质量均分 {avg:.1f}，低分 {low}/{len(scores)}")
+            self._quality_overview_label.setText(
+                "质量均分 "
+                f"{avg:.1f}，低分 {low}/{len(scores)}，近重复 {duplicate_risk}/{len(scores)}"
+            )
         else:
             self._quality_overview_label.setText(
-                f"Quality avg {avg:.1f}, low {low}/{len(scores)}"
+                "Quality avg "
+                f"{avg:.1f}, low {low}/{len(scores)}, "
+                f"near-duplicate {duplicate_risk}/{len(scores)}"
             )
 
     def _on_toggle_low_quality_filter(self, checked: bool) -> None:
         self._quality_low_only = bool(checked)
+        self._apply_filters()
+
+    def _on_toggle_duplicate_risk_filter(self, checked: bool) -> None:
+        self._duplicate_risk_only = bool(checked)
         self._apply_filters()
 
     def _get_card_question_text(self, card: CardDraft) -> str:
@@ -1106,6 +1129,19 @@ class CardPreviewPage(QWidget):
             first_value = next(iter(card.fields.values()))
             return self._compact_plain_text(first_value)
         return "（空问题）" if self._main.config.language == "zh" else "(Empty question)"
+
+    def _build_card_list_item_text(self, card: CardDraft) -> str:
+        question = self._get_card_question_text(card)
+        badges: list[str] = []
+        if self._compute_card_quality_score(card) < 60:
+            badges.append("[低分]" if self._main.config.language == "zh" else "[Low]")
+        if self._is_duplicate_risk_card(card):
+            badges.append(
+                "[近重复]" if self._main.config.language == "zh" else "[Near Duplicate]"
+            )
+        if not badges:
+            return question
+        return f"{question} {' '.join(badges)}"
 
     def _on_card_selected(self, index: int):
         """Handle card selection from list."""
@@ -1228,6 +1264,7 @@ class CardPreviewPage(QWidget):
             "搜索卡片内容..." if is_zh else "Search card content..."
         )
         self._btn_low_quality.setText("仅低分" if is_zh else "Low Quality")
+        self._btn_duplicate_risk.setText("仅近重复" if is_zh else "Near Duplicates")
         self._list_title_label.setText("问题列表" if is_zh else "Questions")
         self._btn_prev.setText("上一张" if is_zh else "Previous")
         self._btn_next.setText("下一张" if is_zh else "Next")
@@ -1884,6 +1921,45 @@ class CardPreviewPage(QWidget):
                 break
 
         return len(risky_indices), suspicious_pairs, truncated
+
+    def _collect_duplicate_risk_indices(self, cards: list[CardDraft], threshold: float) -> set[int]:
+        if len(cards) < 2:
+            return set()
+
+        texts = [self._extract_card_question_for_similarity(card) for card in cards]
+        risky_indices: set[int] = set()
+        max_comparisons = 15000
+        comparisons = 0
+
+        for i in range(len(texts)):
+            if comparisons >= max_comparisons:
+                break
+            left = texts[i]
+            if not left:
+                continue
+            for j in range(i + 1, len(texts)):
+                comparisons += 1
+                if comparisons > max_comparisons:
+                    break
+                right = texts[j]
+                if not right:
+                    continue
+                ratio = SequenceMatcher(None, left, right).ratio()
+                if ratio >= threshold:
+                    risky_indices.add(i)
+                    risky_indices.add(j)
+            if comparisons > max_comparisons:
+                break
+
+        return risky_indices
+
+    def _rebuild_duplicate_risk_cache(self) -> None:
+        threshold = float(getattr(self._main.config, "semantic_duplicate_threshold", 0.9))
+        risky_indices = self._collect_duplicate_risk_indices(self._all_cards, threshold)
+        self._duplicate_risk_card_ids = {id(self._all_cards[index]) for index in risky_indices}
+
+    def _is_duplicate_risk_card(self, card: CardDraft) -> bool:
+        return id(card) in self._duplicate_risk_card_ids
 
     def _show_push_preview(self) -> None:
         is_zh = self._main.config.language == "zh"
