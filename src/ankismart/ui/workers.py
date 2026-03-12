@@ -32,6 +32,10 @@ DocumentConverter = None
 logger = get_logger(__name__)
 
 
+class _WorkerCancelledError(RuntimeError):
+    """Internal control-flow exception for cooperative worker cancellation."""
+
+
 def _format_error_for_ui(exc: Exception) -> str:
     """Preserve structured error code in UI error payload."""
     if isinstance(exc, AnkiSmartError):
@@ -148,18 +152,46 @@ class ConvertWorker(QThread):
         super().__init__()
         self._converter = converter
         self._file_path = file_path
+        self._cancelled = False
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation."""
+        self._cancel_event.set()
+        self._cancelled = True
+
+    def _is_cancelled(self) -> bool:
+        return (
+            self._cancelled
+            or self._cancel_event.is_set()
+            or bool(getattr(self, "isInterruptionRequested", lambda: False)())
+        )
 
     def run(self) -> None:
         try:
+            if self._is_cancelled():
+                self.cancelled.emit()
+                return
             self.progress.emit(f"正在转换文件: {self._file_path.name}")
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
 
             def progress_callback(msg: str) -> None:
+                if self._is_cancelled():
+                    raise _WorkerCancelledError()
                 self.progress.emit(msg)
+                if self._is_cancelled():
+                    raise _WorkerCancelledError()
 
             result = self._converter.convert(self._file_path, progress_callback=progress_callback)
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
             self.finished.emit(result)
+        except _WorkerCancelledError:
+            self.cancelled.emit()
         except Exception as e:
-            self.error.emit(_format_error_for_ui(e))
+            if not self._is_cancelled():
+                self.error.emit(_format_error_for_ui(e))
 
 
 class GenerateWorker(QThread):
@@ -186,10 +218,29 @@ class GenerateWorker(QThread):
         self._tags = tags
         self._strategy = strategy
         self._target_count = target_count
+        self._cancelled = False
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation."""
+        self._cancel_event.set()
+        self._cancelled = True
+
+    def _is_cancelled(self) -> bool:
+        return (
+            self._cancelled
+            or self._cancel_event.is_set()
+            or bool(getattr(self, "isInterruptionRequested", lambda: False)())
+        )
 
     def run(self) -> None:
         try:
+            if self._is_cancelled():
+                self.cancelled.emit()
+                return
             self.progress.emit(f"正在生成卡片 (策略: {self._strategy})")
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
 
             request = GenerateRequest(
                 markdown=self._markdown_result.content,
@@ -202,9 +253,14 @@ class GenerateWorker(QThread):
             )
 
             cards = self._generator.generate(request)
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
             self.finished.emit(cards)
+        except _WorkerCancelledError:
+            self.cancelled.emit()
         except Exception as e:
-            self.error.emit(_format_error_for_ui(e))
+            if not self._is_cancelled():
+                self.error.emit(_format_error_for_ui(e))
 
 
 class PushWorker(QThread):
@@ -292,14 +348,38 @@ class ExportWorker(QThread):
         self._exporter = exporter
         self._cards = cards
         self._output_path = output_path
+        self._cancelled = False
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation."""
+        self._cancel_event.set()
+        self._cancelled = True
+
+    def _is_cancelled(self) -> bool:
+        return (
+            self._cancelled
+            or self._cancel_event.is_set()
+            or bool(getattr(self, "isInterruptionRequested", lambda: False)())
+        )
 
     def run(self) -> None:
         try:
+            if self._is_cancelled():
+                self.cancelled.emit()
+                return
             self.progress.emit(f"正在导出 {len(self._cards)} 张卡片到 APKG")
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
             result_path = self._exporter.export(self._cards, self._output_path)
+            if self._is_cancelled():
+                raise _WorkerCancelledError()
             self.finished.emit(str(result_path))
+        except _WorkerCancelledError:
+            self.cancelled.emit()
         except Exception as e:
-            self.error.emit(_format_error_for_ui(e))
+            if not self._is_cancelled():
+                self.error.emit(_format_error_for_ui(e))
 
 
 class ConnectionCheckWorker(QThread):

@@ -1514,6 +1514,7 @@ class CardPreviewPage(QWidget):
         worker.progress.connect(self._on_export_progress)
         worker.finished.connect(self._on_export_finished)
         worker.error.connect(self._on_export_error)
+        worker.cancelled.connect(self._on_export_cancelled)
         worker.start()
 
     def _on_export_progress(self, message: str) -> None:
@@ -1593,6 +1594,44 @@ class CardPreviewPage(QWidget):
             duration_seconds=elapsed,
             success=False,
             error_code="export_error",
+        )
+        save_config(self._main.config)
+
+    def _on_export_cancelled(self) -> None:
+        """Handle export cancellation."""
+        self._cleanup_export_worker()
+        is_zh = self._main.config.language == "zh"
+        elapsed = (
+            max(0.0, time.monotonic() - self._export_start_ts) if self._export_start_ts else 0.0
+        )
+        self._progress_bar.hide()
+        self._set_action_buttons_enabled(True)
+        self._count_label.setText("导出已取消" if is_zh else "Export cancelled")
+        InfoBar.warning(
+            title="已取消" if is_zh else "Cancelled",
+            content="APKG 导出已被用户取消" if is_zh else "APKG export cancelled by user",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=3000,
+            parent=self,
+        )
+        append_task_history(
+            self._main.config,
+            event="export_apkg",
+            status="cancelled",
+            summary="用户取消导出 APKG",
+            payload={
+                "cards_total": len(self._all_cards),
+                "duration_seconds": round(elapsed, 2),
+            },
+        )
+        record_operation_metric(
+            self._main.config,
+            event="export",
+            duration_seconds=elapsed,
+            success=False,
+            error_code="cancelled",
         )
         save_config(self._main.config)
 
@@ -1924,6 +1963,8 @@ class CardPreviewPage(QWidget):
         if worker is None:
             return
         if hasattr(worker, "isRunning") and worker.isRunning():
+            if hasattr(worker, "cancel"):
+                worker.cancel()
             worker.wait(200)
             if worker.isRunning():
                 return
@@ -1939,6 +1980,8 @@ class CardPreviewPage(QWidget):
             self._push_worker.requestInterruption()
             self._push_worker.wait(300)
         if self._export_worker and self._export_worker.isRunning():
+            if hasattr(self._export_worker, "cancel"):
+                self._export_worker.cancel()
             self._export_worker.requestInterruption()
             self._export_worker.wait(300)
         self._cleanup_push_worker()

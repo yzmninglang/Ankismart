@@ -64,6 +64,54 @@ def test_convert_worker_error_emits_structured_message() -> None:
     assert errors == ["[E_LLM_AUTH_ERROR] boom"]
 
 
+def test_convert_worker_cancelled_before_run_emits_cancelled() -> None:
+    called = {"convert": False}
+    cancelled: list[bool] = []
+
+    class _FakeConverter:
+        def convert(self, *_args, **_kwargs):
+            called["convert"] = True
+            return MarkdownResult(
+                content="# ok",
+                source_path="demo.md",
+                source_format="markdown",
+                trace_id="trace-cancel",
+            )
+
+    worker = ConvertWorker(_FakeConverter(), Path("demo.md"))
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.cancel()
+    worker.run()
+
+    assert cancelled == [True]
+    assert called["convert"] is False
+
+
+def test_convert_worker_cancelled_during_progress_does_not_emit_finished() -> None:
+    finished: list[MarkdownResult] = []
+    cancelled: list[bool] = []
+
+    class _FakeConverter:
+        def convert(self, path, *, progress_callback=None):
+            if progress_callback:
+                progress_callback("step-1")
+            return MarkdownResult(
+                content="# ok",
+                source_path=str(path),
+                source_format="markdown",
+                trace_id="trace-cancel-progress",
+            )
+
+    worker = ConvertWorker(_FakeConverter(), Path("demo.md"))
+    worker.finished.connect(finished.append)
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.progress.connect(lambda _msg: worker.cancel())
+    worker.run()
+
+    assert finished == []
+    assert cancelled == [True]
+
+
 def test_generate_worker_success_emits_finished() -> None:
     events: list[str] = []
     finished: list[list] = []
@@ -122,6 +170,69 @@ def test_generate_worker_error_emits_structured_message() -> None:
     worker.run()
 
     assert errors == ["[E_LLM_AUTH_ERROR] provider down"]
+
+
+def test_generate_worker_cancelled_before_run_emits_cancelled() -> None:
+    called = {"generate": False}
+    cancelled: list[bool] = []
+
+    class _FakeGenerator:
+        def generate(self, _request):
+            called["generate"] = True
+            return []
+
+    markdown = MarkdownResult(
+        content="content",
+        source_path="demo.md",
+        source_format="markdown",
+        trace_id="trace-g-cancel",
+    )
+    worker = GenerateWorker(
+        _FakeGenerator(),
+        markdown,
+        deck_name="Default",
+        tags=[],
+        strategy="basic",
+    )
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.cancel()
+    worker.run()
+
+    assert cancelled == [True]
+    assert called["generate"] is False
+
+
+def test_generate_worker_cancelled_after_generate_does_not_emit_finished() -> None:
+    finished: list[list] = []
+    cancelled: list[bool] = []
+
+    markdown = MarkdownResult(
+        content="content",
+        source_path="demo.md",
+        source_format="markdown",
+        trace_id="trace-g-cancel-after",
+    )
+
+    worker = GenerateWorker(
+        None,
+        markdown,
+        deck_name="Default",
+        tags=[],
+        strategy="basic",
+    )
+
+    class _FakeGenerator:
+        def generate(self, _request):
+            worker.cancel()
+            return []
+
+    worker._generator = _FakeGenerator()
+    worker.finished.connect(finished.append)
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.run()
+
+    assert finished == []
+    assert cancelled == [True]
 
 
 def test_push_worker_cancelled_before_run_emits_cancelled() -> None:
@@ -185,6 +296,44 @@ def test_export_worker_success_emits_output_path(tmp_path) -> None:
     worker.run()
 
     assert finished == [str(output_path)]
+
+
+def test_export_worker_cancelled_before_run_emits_cancelled(tmp_path) -> None:
+    called = {"export": False}
+    cancelled: list[bool] = []
+
+    class _Exporter:
+        def export(self, _cards, path):
+            called["export"] = True
+            return path
+
+    worker = ExportWorker(_Exporter(), [], tmp_path / "cards.apkg")
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.cancel()
+    worker.run()
+
+    assert cancelled == [True]
+    assert called["export"] is False
+
+
+def test_export_worker_cancelled_after_export_does_not_emit_finished(tmp_path) -> None:
+    finished: list[str] = []
+    cancelled: list[bool] = []
+
+    worker = ExportWorker(None, [], tmp_path / "cards.apkg")
+
+    class _Exporter:
+        def export(self, _cards, path):
+            worker.cancel()
+            return path
+
+    worker._exporter = _Exporter()
+    worker.finished.connect(finished.append)
+    worker.cancelled.connect(lambda: cancelled.append(True))
+    worker.run()
+
+    assert finished == []
+    assert cancelled == [True]
 
 
 def test_export_worker_error_emits_message(tmp_path) -> None:
