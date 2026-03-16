@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from qfluentwidgets import BodyLabel, PrimaryPushButton, PushButton, SimpleCardWidget
+from qfluentwidgets import BodyLabel, ExpandGroupSettingCard, PrimaryPushButton, PushButton
 
 from ankismart.core.config import AppConfig, LLMProviderConfig
 from ankismart.ui.settings_page import SettingsPage
@@ -86,12 +86,13 @@ def test_provider_ui_uses_english_copy_for_empty_fields(_qapp) -> None:
     assert page._provider_summary_status_label.isHidden()
     assert page._provider_summary_meta_label.isHidden()
 
-    row = page._provider_group_widgets["p1"]
     assert (
-        row.findChild(BodyLabel, "providerRowSummary").text()
+        page._provider_detail_widgets[0].findChild(BodyLabel, "providerExpandSummary").text()
         == "Unnamed provider / No model configured / No endpoint"
     )
-    assert "API Key" not in row.findChild(BodyLabel, "providerRowSummary").text()
+    assert "API Key" not in page._provider_detail_widgets[0].findChild(
+        BodyLabel, "providerExpandSummary"
+    ).text()
 
     action_widget = page._provider_action_widgets["p1"]
     assert action_widget.layout().itemAt(0).widget().text() == "Current"
@@ -107,17 +108,36 @@ def test_provider_list_card_renders_one_group_per_provider(_qapp) -> None:
     ]
     page = _build_settings_page_with_providers(_qapp, providers, active_provider_id="p1")
 
-    assert isinstance(page._provider_list_card, SimpleCardWidget)
+    assert isinstance(page._provider_list_card, ExpandGroupSettingCard)
     assert list(page._provider_group_widgets) == ["p1", "p2"]
-    assert len(page._provider_group_widgets) == 2
+    assert len(page._provider_list_card.widgets) == 2
 
-    first_row = page._provider_group_widgets["p1"]
-    summary_label = first_row.findChild(BodyLabel, "providerRowSummary")
-    assert summary_label is not None
-    assert "Vendor-X" in summary_label.text()
-    assert "model-a" in summary_label.text()
-    assert "https://a.example/v1" in summary_label.text()
-    assert first_row.height() <= 52
+    first_group = page._provider_group_widgets["p1"]
+    assert first_group.titleLabel.text() == "Vendor-X"
+    assert "model-a" in first_group.contentLabel.text()
+    assert "https://a.example/v1" in first_group.contentLabel.text()
+    assert page._provider_list_card.isExpand is False
+
+
+def test_provider_expand_group_hides_api_key_and_keeps_actions(_qapp) -> None:
+    providers = [
+        LLMProviderConfig(
+            id="p1",
+            name="OpenAI",
+            api_key="secret-key",
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1",
+        )
+    ]
+    page = _build_settings_page_with_providers(_qapp, providers, active_provider_id="p1")
+
+    detail_widget = page._provider_detail_widgets[0]
+    labels = detail_widget.findChildren(BodyLabel)
+    joined_text = " ".join(label.text() for label in labels)
+
+    assert "API Key" not in joined_text
+    assert "secret-key" not in joined_text
+    assert detail_widget.findChild(BodyLabel, "providerExpandSummary") is not None
 
 
 def test_provider_summary_uses_first_provider_when_active_id_missing(_qapp) -> None:

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     ComboBox,
+    ExpandGroupSettingCard,
     ExpandLayout,
     FluentIcon,
     InfoBar,
@@ -34,7 +35,6 @@ from qfluentwidgets import (
     ScrollArea,
     SettingCard,
     SettingCardGroup,
-    SimpleCardWidget,
     Slider,
     SmoothMode,
     SpinBox,
@@ -592,26 +592,14 @@ class SettingsPage(ScrollArea):
         card.hBoxLayout.addSpacing(16)
         return card
 
-    def _build_provider_list_card(self) -> SimpleCardWidget:
-        card = SimpleCardWidget(self.scrollWidget)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(18, 16, 18, 16)
-        card_layout.setSpacing(10)
-
-        self._provider_list_title_label = BodyLabel(self._provider_text("list_title"), card)
-        self._provider_list_title_label.setStyleSheet("font-size: 15px; font-weight: 700;")
-        card_layout.addWidget(self._provider_list_title_label)
-
-        self._provider_list_desc_label = BodyLabel(self._provider_text("list_desc"), card)
-        self._provider_list_desc_label.setWordWrap(True)
-        self._provider_list_desc_label.setStyleSheet("font-size: 12px;")
-        card_layout.addWidget(self._provider_list_desc_label)
-
-        self._provider_list_rows_container = QWidget(card)
-        self._provider_list_rows_layout = QVBoxLayout(self._provider_list_rows_container)
-        self._provider_list_rows_layout.setContentsMargins(0, 4, 0, 0)
-        self._provider_list_rows_layout.setSpacing(8)
-        card_layout.addWidget(self._provider_list_rows_container)
+    def _build_provider_list_card(self) -> ExpandGroupSettingCard:
+        card = ExpandGroupSettingCard(
+            FluentIcon.ROBOT,
+            self._provider_text("list_title"),
+            self._provider_text("list_desc"),
+            self.scrollWidget,
+        )
+        card.setExpand(False)
         return card
 
     def _init_layout(self):
@@ -1302,28 +1290,22 @@ class SettingsPage(ScrollArea):
         self._provider_action_widgets = {}
         self._provider_detail_widgets = []
 
-        while self._provider_list_rows_layout.count():
-            item = self._provider_list_rows_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.hide()
-                widget.setParent(None)
-                widget.deleteLater()
+        for group in list(self._provider_list_card.widgets):
+            self._provider_list_card.removeGroupWidget(group)
 
         can_delete = len(self._providers) > 1
         for provider in self._providers:
             is_active = provider.id == self._active_provider_id
-            detail_widget = QWidget(self._provider_list_rows_container)
+            detail_widget = QWidget(self._provider_list_card)
             detail_widget.setObjectName("providerRowPanel")
-            detail_widget.setFixedHeight(44)
-            detail_layout = QHBoxLayout(detail_widget)
-            detail_layout.setContentsMargins(12, 6, 12, 6)
-            detail_layout.setSpacing(10)
+            detail_layout = QVBoxLayout(detail_widget)
+            detail_layout.setContentsMargins(12, 10, 12, 10)
+            detail_layout.setSpacing(8)
 
             summary_label = BodyLabel(self._provider_row_text(provider), detail_widget)
-            summary_label.setObjectName("providerRowSummary")
-            summary_label.setWordWrap(False)
-            detail_layout.addWidget(summary_label, 1)
+            summary_label.setObjectName("providerExpandSummary")
+            summary_label.setWordWrap(True)
+            detail_layout.addWidget(summary_label)
 
             action_widget = self._build_provider_action_widget(
                 provider,
@@ -1331,14 +1313,22 @@ class SettingsPage(ScrollArea):
                 can_delete=can_delete,
                 parent=detail_widget,
             )
-            detail_layout.addWidget(action_widget, 0, Qt.AlignmentFlag.AlignRight)
+            detail_layout.addWidget(action_widget)
 
-            self._provider_list_rows_layout.addWidget(detail_widget)
-            self._provider_group_widgets[provider.id] = detail_widget
+            group_widget = self._provider_list_card.addGroup(
+                FluentIcon.ACCEPT_MEDIUM if is_active else FluentIcon.ROBOT,
+                provider.name.strip() or self._provider_text("unnamed_provider"),
+                " · ".join(
+                    [
+                        self._provider_model_text(provider),
+                        self._provider_url_text(provider),
+                    ]
+                ),
+                detail_widget,
+            )
+            self._provider_group_widgets[provider.id] = group_widget
             self._provider_action_widgets[provider.id] = action_widget
             self._provider_detail_widgets.append(detail_widget)
-
-        self._provider_list_rows_layout.addStretch(1)
 
     def _build_provider_action_widget(
         self,
