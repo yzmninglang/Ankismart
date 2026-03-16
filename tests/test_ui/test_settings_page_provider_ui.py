@@ -86,13 +86,17 @@ def test_provider_ui_uses_english_copy_for_empty_fields(_qapp) -> None:
     assert page._provider_summary_status_label.isHidden()
     assert page._provider_summary_meta_label.isHidden()
 
+    detail_widget = page._provider_detail_widgets[0]
+    assert detail_widget.findChild(BodyLabel, "providerExpandName").text() == "Unnamed provider"
     assert (
-        page._provider_detail_widgets[0].findChild(BodyLabel, "providerExpandSummary").text()
-        == "Unnamed provider / No model configured / No endpoint"
+        detail_widget.findChild(BodyLabel, "providerExpandModel").text()
+        == "No model configured"
     )
-    assert "API Key" not in page._provider_detail_widgets[0].findChild(
-        BodyLabel, "providerExpandSummary"
-    ).text()
+    assert detail_widget.findChild(BodyLabel, "providerExpandUrl").text() == "No endpoint"
+    assert detail_widget.findChild(BodyLabel, "providerExpandRpm").text() == "RPM: Unlimited"
+    assert "API Key" not in " ".join(
+        label.text() for label in detail_widget.findChildren(BodyLabel)
+    )
 
     action_widget = page._provider_action_widgets["p1"]
     assert action_widget.layout().itemAt(0).widget().text() == "Current"
@@ -137,7 +141,54 @@ def test_provider_expand_group_hides_api_key_and_keeps_actions(_qapp) -> None:
 
     assert "API Key" not in joined_text
     assert "secret-key" not in joined_text
-    assert detail_widget.findChild(BodyLabel, "providerExpandSummary") is not None
+    assert detail_widget.findChild(BodyLabel, "providerExpandName") is not None
+    assert detail_widget.height() <= 56
+
+
+def test_provider_expand_group_uses_aligned_single_line_columns(_qapp) -> None:
+    providers = [
+        LLMProviderConfig(
+            id="p1",
+            name="OpenAI",
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1",
+            rpm_limit=0,
+        ),
+        LLMProviderConfig(
+            id="p2",
+            name="DeepSeek",
+            model="deepseek-chat",
+            base_url="https://api.deepseek.com/v1",
+            rpm_limit=120,
+        ),
+    ]
+    page = _build_settings_page_with_providers(_qapp, providers, active_provider_id="p1")
+
+    first_detail = page._provider_detail_widgets[0]
+    second_detail = page._provider_detail_widgets[1]
+    first_labels = {
+        key: first_detail.findChild(BodyLabel, key)
+        for key in (
+            "providerExpandName",
+            "providerExpandModel",
+            "providerExpandUrl",
+            "providerExpandRpm",
+        )
+    }
+    second_labels = {
+        key: second_detail.findChild(BodyLabel, key)
+        for key in (
+            "providerExpandName",
+            "providerExpandModel",
+            "providerExpandUrl",
+            "providerExpandRpm",
+        )
+    }
+
+    for key in first_labels:
+        assert first_labels[key] is not None
+        assert second_labels[key] is not None
+        assert first_labels[key].minimumWidth() == second_labels[key].minimumWidth()
 
 
 def test_provider_summary_uses_first_provider_when_active_id_missing(_qapp) -> None:

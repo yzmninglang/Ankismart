@@ -1298,14 +1298,27 @@ class SettingsPage(ScrollArea):
             is_active = provider.id == self._active_provider_id
             detail_widget = QWidget(self._provider_list_card)
             detail_widget.setObjectName("providerRowPanel")
-            detail_layout = QVBoxLayout(detail_widget)
-            detail_layout.setContentsMargins(12, 10, 12, 10)
+            detail_widget.setFixedHeight(46)
+            detail_layout = QHBoxLayout(detail_widget)
+            detail_layout.setContentsMargins(12, 6, 12, 6)
             detail_layout.setSpacing(8)
 
-            summary_label = BodyLabel(self._provider_row_text(provider), detail_widget)
-            summary_label.setObjectName("providerExpandSummary")
-            summary_label.setWordWrap(True)
-            detail_layout.addWidget(summary_label)
+            for object_name, text, width in (
+                (
+                    "providerExpandName",
+                    provider.name.strip() or self._provider_text("unnamed_provider"),
+                    116,
+                ),
+                ("providerExpandModel", self._provider_model_text(provider), 140),
+                ("providerExpandUrl", self._provider_url_text(provider), 280),
+                ("providerExpandRpm", self._provider_rpm_text(provider), 96),
+            ):
+                label = BodyLabel(text, detail_widget)
+                label.setObjectName(object_name)
+                label.setWordWrap(False)
+                label.setMinimumWidth(width)
+                label.setMaximumWidth(width)
+                detail_layout.addWidget(label)
 
             action_widget = self._build_provider_action_widget(
                 provider,
@@ -1313,7 +1326,7 @@ class SettingsPage(ScrollArea):
                 can_delete=can_delete,
                 parent=detail_widget,
             )
-            detail_layout.addWidget(action_widget)
+            detail_layout.addWidget(action_widget, 0, Qt.AlignmentFlag.AlignRight)
 
             group_widget = self._provider_list_card.addGroup(
                 FluentIcon.ACCEPT_MEDIUM if is_active else FluentIcon.ROBOT,
@@ -1339,6 +1352,10 @@ class SettingsPage(ScrollArea):
         parent: QWidget,
     ) -> QWidget:
         action_widget = QWidget(parent)
+        action_widget.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
         action_layout = QHBoxLayout(action_widget)
         action_layout.setContentsMargins(2, 2, 2, 2)
         action_layout.setSpacing(4)
@@ -1371,7 +1388,6 @@ class SettingsPage(ScrollArea):
         delete_btn.setEnabled(can_delete)
         delete_btn.clicked.connect(lambda checked=False, p=provider: self._delete_provider(p))
         action_layout.addWidget(delete_btn)
-        action_layout.addStretch(1)
         return action_widget
 
     def _current_provider(self) -> LLMProviderConfig | None:
