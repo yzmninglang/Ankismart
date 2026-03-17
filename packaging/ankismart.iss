@@ -52,6 +52,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
 chinesesimplified.CreateDesktopShortcutOnFinish=创建桌面快捷方式
+chinesesimplified.LaunchAppOnFinish=启动 Ankismart
 chinesesimplified.WelcomeHeadline=安装 Ankismart
 chinesesimplified.WelcomeBody=Ankismart 会把文档转换、卡片生成与推送流程集中到一个桌面工具里。安装程序将把应用文件放在当前目录，配置保存在 %LOCALAPPDATA%\\ankismart，日志保存在安装目录下的 logs 文件夹中。
 chinesesimplified.SelectDirBody=请选择 Ankismart 的安装位置。程序文件会写入这里，配置仍保存在 %LOCALAPPDATA%\\ankismart，日志写入安装目录下的 logs 文件夹。
@@ -59,6 +60,7 @@ chinesesimplified.FinishedHeadline=Ankismart 已准备就绪
 chinesesimplified.FinishedBody=安装已经完成。你现在可以立即启动 Ankismart，开始导入文档、生成卡片并推送到 Anki。
 chinesesimplified.RemoveUserDataOnUninstall=卸载时删除此用户的配置与本地数据（%LOCALAPPDATA%\\ankismart）
 english.CreateDesktopShortcutOnFinish=Create desktop shortcut
+english.LaunchAppOnFinish=Launch Ankismart
 english.WelcomeHeadline=Install Ankismart
 english.WelcomeBody=Ankismart brings document conversion, card generation, review, and Anki delivery into one desktop app. The installer keeps app files here, stores configuration in %LOCALAPPDATA%\\ankismart, and writes logs to the local logs folder beside the executable.
 english.SelectDirBody=Choose where Ankismart should be installed. App files will be written here, configuration stays in %LOCALAPPDATA%\\ankismart, and logs are stored in the local logs folder beside the executable.
@@ -88,6 +90,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 var
   RemoveUserDataCheck: TNewCheckBox;
   DesktopIconCheck: TNewCheckBox;
+  LaunchAppCheck: TNewCheckBox;
 
 procedure ApplyWizardTypography();
 begin
@@ -124,13 +127,24 @@ begin
 
   DesktopIconCheck := TNewCheckBox.Create(WizardForm.FinishedPage);
   DesktopIconCheck.Parent := WizardForm.FinishedPage;
-  DesktopIconCheck.Left := WizardForm.RunList.Left;
-  DesktopIconCheck.Top := WizardForm.RunList.Top;
-  DesktopIconCheck.Width := WizardForm.RunList.Width;
+  DesktopIconCheck.Left := WizardForm.FinishedLabel.Left;
+  DesktopIconCheck.Top := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(16);
+  DesktopIconCheck.Width := WizardForm.FinishedLabel.Width;
+  DesktopIconCheck.Height := ScaleY(26);
   DesktopIconCheck.Caption := ExpandConstant('{cm:CreateDesktopShortcutOnFinish}');
   DesktopIconCheck.Checked := True;
 
-  WizardForm.RunList.Top := DesktopIconCheck.Top + DesktopIconCheck.Height + ScaleY(8);
+  LaunchAppCheck := TNewCheckBox.Create(WizardForm.FinishedPage);
+  LaunchAppCheck.Parent := WizardForm.FinishedPage;
+  LaunchAppCheck.Left := DesktopIconCheck.Left;
+  LaunchAppCheck.Top := DesktopIconCheck.Top + DesktopIconCheck.Height + ScaleY(6);
+  LaunchAppCheck.Width := DesktopIconCheck.Width;
+  LaunchAppCheck.Height := ScaleY(26);
+  LaunchAppCheck.Caption := ExpandConstant('{cm:LaunchAppOnFinish}');
+  LaunchAppCheck.Checked := False;
+
+  WizardForm.RunList.Visible := False;
+  WizardForm.RunList.Height := 0;
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -142,6 +156,8 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   if CurPageID = wpFinished then
   begin
+    WizardForm.RunList.Visible := False;
+    WizardForm.RunList.Height := 0;
     WizardForm.RunList.Checked[0] := False;
   end;
 end;
@@ -154,6 +170,9 @@ begin
 
   if CurPageID <> wpFinished then
     exit;
+
+  if LaunchAppCheck <> nil then
+    WizardForm.RunList.Checked[0] := LaunchAppCheck.Checked;
 
   if (DesktopIconCheck <> nil) and not DesktopIconCheck.Checked then
   begin
