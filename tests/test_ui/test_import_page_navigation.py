@@ -176,6 +176,24 @@ def test_import_page_real_instance_does_not_render_startup_precheck() -> None:
     assert all("First-Run Precheck" not in text for text in texts)
 
 
+def test_import_page_real_instance_does_not_render_performance_hint() -> None:
+    page = ImportPage(DummyMain())
+
+    texts: list[str] = []
+    for widget in page.findChildren(object):
+        text = getattr(widget, "text", None)
+        if callable(text):
+            try:
+                value = text()
+            except TypeError:
+                continue
+            if isinstance(value, str) and value:
+                texts.append(value)
+
+    assert all("最近耗时" not in text for text in texts)
+    assert all("Recent conversion timing" not in text for text in texts)
+
+
 def test_import_page_defers_strategy_group_until_shown() -> None:
     page = ImportPage(DummyMain())
 

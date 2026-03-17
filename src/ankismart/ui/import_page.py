@@ -62,7 +62,7 @@ from ankismart.ui.styles import (
     SPACING_MEDIUM,
     SPACING_SMALL,
 )
-from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_text
+from ankismart.ui.utils import ProgressMixin, split_tags_text
 from ankismart.ui.workers import BatchConvertWorker
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
@@ -1162,10 +1162,6 @@ class ImportPage(ProgressMixin, QWidget):
         self._status_label = BodyLabel()
         self._status_label.setText("")
         self._status_label.setWordWrap(True)
-        self._performance_hint_label = BodyLabel()
-        self._performance_hint_label.setWordWrap(True)
-        self._refresh_conversion_hint()
-
         self._btn_cancel = PushButton("取消" if self._main.config.language == "zh" else "Cancel")
         self._btn_cancel.setIcon(FluentIcon.CLOSE)
         self._btn_cancel.clicked.connect(self._cancel_operation)
@@ -1175,21 +1171,8 @@ class ImportPage(ProgressMixin, QWidget):
         status_row.addWidget(self._btn_cancel)
 
         layout.addLayout(status_row)
-        layout.addWidget(self._performance_hint_label)
 
         return widget
-
-    def _refresh_conversion_hint(self) -> None:
-        label = self.__dict__.get("_performance_hint_label")
-        if label is None:
-            return
-        label.setText(
-            format_operation_hint(
-                self._main.config,
-                event="convert",
-                language=self._main.config.language,
-            )
-        )
 
     def _on_files_dropped(self, file_paths: list[Path]):
         """Handle files dropped into the drop area."""
@@ -2303,7 +2286,6 @@ class ImportPage(ProgressMixin, QWidget):
                 error_code="failed",
             )
         save_config(self._main.config)
-        self._refresh_conversion_hint()
 
         # Show errors if any
         if result.errors:
@@ -2376,7 +2358,6 @@ class ImportPage(ProgressMixin, QWidget):
             payload={"duration_seconds": round(elapsed, 2)},
         )
         save_config(self._main.config)
-        self._refresh_conversion_hint()
         error_display = build_error_display(error, self._main.config.language)
         self._status_label.setText(
             f"转换失败: {error_display['title']}"
@@ -2435,7 +2416,6 @@ class ImportPage(ProgressMixin, QWidget):
             error_code="cancelled",
         )
         save_config(self._main.config)
-        self._refresh_conversion_hint()
         self._status_label.setText(
             "操作已取消" if self._main.config.language == "zh" else "Operation cancelled"
         )
@@ -2480,7 +2460,6 @@ class ImportPage(ProgressMixin, QWidget):
         """Clear all selections and inputs."""
         self._clear_files()
         self._status_label.clear()
-        self._refresh_conversion_hint()
 
         # Reset sliders
         for i, (strategy_id, slider, value_label) in enumerate(self._strategy_sliders):
@@ -2820,7 +2799,6 @@ class ImportPage(ProgressMixin, QWidget):
                 self._strategy_template_combo.setCurrentIndex(0)
             self._strategy_template_combo.blockSignals(False)
 
-        self._refresh_conversion_hint()
 
     def update_theme(self):
         """Update theme-dependent components when theme changes."""

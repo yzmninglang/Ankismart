@@ -75,6 +75,24 @@ class TestPreviewPageLoadDocuments:
         assert not hasattr(page, "_btn_preview")
         assert page._btn_generate is not None
 
+    def test_preview_page_does_not_render_performance_hint(self):
+        main = _make_main_window()
+        page = PreviewPage(main)
+
+        texts: list[str] = []
+        for widget in page.findChildren(object):
+            text = getattr(widget, "text", None)
+            if callable(text):
+                try:
+                    value = text()
+                except TypeError:
+                    continue
+                if isinstance(value, str) and value:
+                    texts.append(value)
+
+        assert all("最近耗时" not in text for text in texts)
+        assert all("Recent generation timing" not in text for text in texts)
+
     def test_load_single_document(self):
         main = _make_main_window()
         page = PreviewPage(main)
@@ -252,7 +270,7 @@ class TestPreviewPageFlow:
 
         main.switch_to_result.assert_not_called()
 
-    def test_refresh_generation_hint_uses_metrics(self):
+    def test_generation_metrics_are_not_rendered_as_hint(self):
         main = _make_main_window()
         main.config.language = "zh"
         main.config.ops_generation_durations = [9.0, 15.0]
@@ -265,11 +283,19 @@ class TestPreviewPageFlow:
             }
         ]
         page = PreviewPage(main)
+        texts: list[str] = []
+        for widget in page.findChildren(object):
+            text = getattr(widget, "text", None)
+            if callable(text):
+                try:
+                    value = text()
+                except TypeError:
+                    continue
+                if isinstance(value, str) and value:
+                    texts.append(value)
 
-        page._refresh_generation_hint()
-
-        assert "最近生成 15.0 秒" in page._performance_hint_label.text()
-        assert "P50 12.0 秒" in page._performance_hint_label.text()
+        assert all("最近生成" not in text for text in texts)
+        assert all("P50" not in text for text in texts)
 
     @mark.parametrize(
         ("callback_name", "args"),

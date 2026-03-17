@@ -36,7 +36,7 @@ from ankismart.ui.styles import (
     get_list_widget_palette,
     scale_px,
 )
-from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_text
+from ankismart.ui.utils import ProgressMixin, split_tags_text
 from ankismart.ui.workers import BatchGenerateWorker, PushWorker
 
 if TYPE_CHECKING:
@@ -192,11 +192,6 @@ class PreviewPage(ProgressMixin, QWidget):
 
         layout.addLayout(title_bar)
 
-        self._performance_hint_label = BodyLabel()
-        self._performance_hint_label.setWordWrap(True)
-        self._refresh_generation_hint()
-        layout.addWidget(self._performance_hint_label)
-
         # Main content area
         content_layout = QHBoxLayout()
         content_layout.setSpacing(MARGIN_SMALL)
@@ -236,15 +231,6 @@ class PreviewPage(ProgressMixin, QWidget):
         layout.addWidget(self._progress_bar)
 
         self._apply_theme_styles()
-
-    def _refresh_generation_hint(self) -> None:
-        self._performance_hint_label.setText(
-            format_operation_hint(
-                self._main.config,
-                event="generate",
-                language=self._main.config.language,
-            )
-        )
 
     def _apply_theme_styles(self) -> None:
         """Apply theme-aware styles for Qt widgets in preview page."""
@@ -1265,7 +1251,6 @@ class PreviewPage(ProgressMixin, QWidget):
             },
         )
         save_config(self._main.config)
-        self._refresh_generation_hint()
 
         InfoBar.success(
             title="制卡完成" if is_zh else "Generation Complete",
@@ -1352,7 +1337,6 @@ class PreviewPage(ProgressMixin, QWidget):
             payload={"duration_seconds": round(elapsed, 2)},
         )
         save_config(self._main.config)
-        self._refresh_generation_hint()
 
     def _on_generation_cancelled(self):
         """Handle generation cancellation."""
@@ -1396,7 +1380,6 @@ class PreviewPage(ProgressMixin, QWidget):
             error_code="cancelled",
         )
         save_config(self._main.config)
-        self._refresh_generation_hint()
 
     def _cancel_generation(self):
         """Cancel the current generation operation."""
@@ -1572,7 +1555,6 @@ class PreviewPage(ProgressMixin, QWidget):
         self._editor.setPlaceholderText(
             "在此编辑 Markdown 内容..." if is_zh else "Edit Markdown content here..."
         )
-        self._refresh_generation_hint()
 
     def update_theme(self):
         """Update theme-dependent components when theme changes."""
