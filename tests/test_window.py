@@ -8,6 +8,7 @@ import pytest
 from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig
+from ankismart.ui import app as app_module
 from ankismart.ui.main_window import MainWindow
 from tests.e2e.conftest import _configure_test_qapp, _teardown_test_window
 
@@ -127,3 +128,52 @@ def test_e2e_window_teardown_closes_window_cleanly(monkeypatch) -> None:
     _teardown_test_window(window, app)
 
     assert window.isVisible() is False
+
+
+def test_startup_timing_helpers_record_stage_costs(monkeypatch) -> None:
+    app_module._STARTUP_TS.clear()
+    samples = iter([10.0, 10.125])
+    monkeypatch.setattr(app_module.time, "perf_counter", lambda: next(samples))
+
+    app_module._mark_startup("main.enter")
+    app_module._mark_startup("window.shown")
+
+    assert app_module._startup_cost_ms("main.enter", "window.shown") == 125.0
+
+
+def test_log_startup_timing_emits_expected_summary(monkeypatch) -> None:
+    app_module._STARTUP_TS.clear()
+    app_module._STARTUP_TS.update(
+        {
+            "main.enter": 1.0,
+            "qapp.created": 1.01,
+            "config.loaded": 1.03,
+            "theme.applied": 1.05,
+            "window.created": 1.10,
+            "window.shown": 1.12,
+        }
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        app_module.logger,
+        "info",
+        lambda message, extra=None: calls.append((message, extra or {})),
+    )
+
+    app_module._log_startup_timing()
+
+    assert calls == [
+        (
+            "startup timing",
+            {
+                "event": "app.startup.timing",
+                "qapp_ms": 10.0,
+                "config_ms": 20.0,
+                "theme_ms": 20.0,
+                "window_ms": 50.0,
+                "show_ms": 20.0,
+                "total_ms": 120.0,
+            },
+        )
+    ]

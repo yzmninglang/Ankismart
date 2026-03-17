@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 from datetime import date, datetime
 from pathlib import Path
@@ -35,10 +36,45 @@ logger = get_logger("app")
 _GITHUB_RELEASES_API_URL = "https://api.github.com/repos/lllll081926i/Ankismart/releases/latest"
 _GITHUB_TAGS_API_URL = "https://api.github.com/repos/lllll081926i/Ankismart/tags?per_page=1"
 _GITHUB_RELEASES_WEB_URL = "https://github.com/lllll081926i/Ankismart/releases"
+_STARTUP_TS: dict[str, float] = {}
 
 
 class _StartupUpdateCheckBridge(QObject):
     finished = pyqtSignal(dict)
+
+
+def _mark_startup(stage: str) -> None:
+    _STARTUP_TS[stage] = time.perf_counter()
+
+
+def _startup_cost_ms(start: str, end: str) -> float:
+    return round((_STARTUP_TS[end] - _STARTUP_TS[start]) * 1000, 2)
+
+
+def _log_startup_timing() -> None:
+    required = (
+        "main.enter",
+        "qapp.created",
+        "config.loaded",
+        "theme.applied",
+        "window.created",
+        "window.shown",
+    )
+    if not all(stage in _STARTUP_TS for stage in required):
+        return
+
+    logger.info(
+        "startup timing",
+        extra={
+            "event": "app.startup.timing",
+            "qapp_ms": _startup_cost_ms("main.enter", "qapp.created"),
+            "config_ms": _startup_cost_ms("qapp.created", "config.loaded"),
+            "theme_ms": _startup_cost_ms("config.loaded", "theme.applied"),
+            "window_ms": _startup_cost_ms("theme.applied", "window.created"),
+            "show_ms": _startup_cost_ms("window.created", "window.shown"),
+            "total_ms": _startup_cost_ms("main.enter", "window.shown"),
+        },
+    )
 
 
 def _get_icon_path() -> Path:
@@ -370,6 +406,8 @@ def main() -> int:
         Application exit code (0 for success, non-zero for error)
     """
     # Enable High DPI scaling
+    _STARTUP_TS.clear()
+    _mark_startup("main.enter")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
@@ -377,6 +415,7 @@ def main() -> int:
 
     # Create application instance
     app = QApplication(sys.argv)
+    _mark_startup("qapp.created")
     app.setApplicationName("Ankismart")
     app.setOrganizationName("Ankismart")
     _apply_text_clarity_profile(app)
@@ -392,6 +431,7 @@ def main() -> int:
     try:
         # Load configuration
         config = load_config()
+        _mark_startup("config.loaded")
         logger.info("Configuration loaded successfully")
 
         # Setup logging with configured level
@@ -401,9 +441,11 @@ def main() -> int:
 
         # Apply theme
         _apply_theme(config.theme)
+        _mark_startup("theme.applied")
 
         # Create and configure main window (pass config to avoid duplicate loading)
         window = MainWindow(config)
+        _mark_startup("window.created")
         logger.info("Main window created")
 
         state = {"config": config, "window": window}
@@ -415,6 +457,8 @@ def main() -> int:
 
         # Show window
         window.show()
+        _mark_startup("window.shown")
+        _log_startup_timing()
         QTimer.singleShot(0, lambda: _start_post_show_tasks(window))
         logger.info("Application started successfully")
 
