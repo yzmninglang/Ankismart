@@ -155,7 +155,7 @@ def test_switch_to_settings_targets_settings_page() -> None:
 
     MainWindow.switch_to_settings(window)
 
-    assert switched_to["index"] == 5
+    assert switched_to["index"] == 4
 
 
 def test_import_page_real_instance_does_not_render_startup_precheck() -> None:
@@ -174,6 +174,32 @@ def test_import_page_real_instance_does_not_render_startup_precheck() -> None:
 
     assert all("首次使用预检" not in text for text in texts)
     assert all("First-Run Precheck" not in text for text in texts)
+
+
+def test_import_page_defers_strategy_group_until_shown() -> None:
+    page = ImportPage(DummyMain())
+
+    assert page._strategy_group_initialized is False
+    assert page._strategy_sliders == []
+
+    page.show()
+    _APP.processEvents()
+    _APP.processEvents()
+
+    assert page._strategy_group_initialized is True
+    assert len(page._strategy_sliders) == 6
+    page.close()
+
+
+def test_build_generation_config_initializes_strategy_group_when_needed() -> None:
+    page = ImportPage(DummyMain())
+
+    config = page.build_generation_config()
+
+    assert page._strategy_group_initialized is True
+    assert config["target_total"] == 20
+    assert config["strategy_mix"] == [{"strategy": "basic", "ratio": 100}]
+    page.close()
 
 
 def test_batch_convert_done_shows_errors(monkeypatch):

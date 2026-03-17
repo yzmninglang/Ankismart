@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+import ankismart.core.config as config_module
 from ankismart.core.config import (
     _ENCRYPTED_PREFIX,
     AppConfig,
@@ -226,6 +227,25 @@ class TestLoadConfig:
         assert cfg.ocr_quality_min_chars == 10
         assert cfg.semantic_duplicate_threshold == 0.6
 
+    def test_load_plain_config_without_touching_crypto(self, tmp_path: Path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.safe_dump({"default_deck": "PlainDeck"}), encoding="utf-8")
+        touched = {"count": 0}
+
+        monkeypatch.setattr(
+            "ankismart.core.config._get_crypto_functions",
+            lambda: touched.__setitem__("count", touched["count"] + 1),
+        )
+        config_module._CONFIG_CACHE.update(
+            {"path": "", "exists": False, "mtime_ns": None, "config": None}
+        )
+
+        with patch("ankismart.core.config.CONFIG_PATH", config_file):
+            cfg = load_config()
+
+        assert cfg.default_deck == "PlainDeck"
+        assert touched["count"] == 0
+
 
 class TestMigration:
     def test_migrates_openai_legacy(self, tmp_path: Path):
@@ -384,6 +404,26 @@ class TestSaveConfig:
         assert loaded.llm_providers[0].api_key == "sk-round-trip"
         assert loaded.default_deck == "RoundTrip"
         assert loaded.default_tags == ["a", "b"]
+
+    def test_save_plain_config_without_touching_crypto(self, tmp_path: Path, monkeypatch):
+        config_dir = tmp_path / ".ankismart"
+        config_file = config_dir / "config.yaml"
+        touched = {"count": 0}
+
+        monkeypatch.setattr(
+            "ankismart.core.config._get_crypto_functions",
+            lambda: touched.__setitem__("count", touched["count"] + 1),
+        )
+
+        with (
+            patch("ankismart.core.config.CONFIG_DIR", config_dir),
+            patch("ankismart.core.config.CONFIG_PATH", config_file),
+        ):
+            save_config(AppConfig(default_deck="PlainOnly"))
+
+        saved = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert saved["default_deck"] == "PlainOnly"
+        assert touched["count"] == 0
 
     def test_raises_config_error_on_write_failure(self):
         cfg = AppConfig()

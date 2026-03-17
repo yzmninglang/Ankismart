@@ -12,11 +12,16 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-from ankismart.core.crypto import decrypt, encrypt
 from ankismart.core.errors import ConfigError, ErrorCode
 from ankismart.core.logging import get_logger
 
 logger = get_logger("config")
+
+
+def _get_crypto_functions():
+    from ankismart.core.crypto import decrypt, encrypt
+
+    return decrypt, encrypt
 
 
 def _resolve_project_root() -> Path:
@@ -249,6 +254,7 @@ def _decrypt_field(value: str, field_name: str) -> str:
     if isinstance(value, str) and value.startswith(_ENCRYPTED_PREFIX):
         ciphertext = value[len(_ENCRYPTED_PREFIX):]
         try:
+            decrypt, _ = _get_crypto_functions()
             return decrypt(ciphertext)
         except Exception as e:
             logger.warning(
@@ -366,12 +372,14 @@ def save_config(config: AppConfig) -> None:
     for field in _ENCRYPTED_FIELDS:
         value = data.get(field, "")
         if value:
+            _, encrypt = _get_crypto_functions()
             data[field] = _ENCRYPTED_PREFIX + encrypt(value)
 
     # Encrypt provider api_keys
     for provider in data.get("llm_providers", []):
         key = provider.get("api_key", "")
         if key:
+            _, encrypt = _get_crypto_functions()
             provider["api_key"] = _ENCRYPTED_PREFIX + encrypt(key)
 
     try:

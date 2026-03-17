@@ -30,6 +30,7 @@ Thumbs.db
 config.yaml
 .ankismart/
 .local/
+.worktrees/
 
 # Testing
 .coverage
