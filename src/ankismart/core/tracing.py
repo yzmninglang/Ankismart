@@ -239,6 +239,10 @@ def get_trace_id() -> str:
     return trace_id
 
 
+def peek_trace_id() -> str | None:
+    return _trace_id_var.get()
+
+
 def set_trace_id(trace_id: str) -> None:
     _trace_id_var.set(trace_id)
 

@@ -426,15 +426,27 @@ NavigationPanel[transparent=true] {{
         else:
             theme = Theme.LIGHT
 
+        app = QApplication.instance()
+        theme_state_unchanged = bool(
+            app is not None
+            and app.property("_ankismart_theme_mode") == theme_name
+            and app.property("_ankismart_theme_color") == FIXED_THEME_ACCENT_HEX
+        )
+
         try:
-            setTheme(theme, lazy=True)
-            setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=True)
+            if not theme_state_unchanged:
+                setTheme(theme, lazy=True)
+                setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=True)
         except RuntimeError as exc:
             # qfluentwidgets may raise this during rapid style manager mutations.
             if "dictionary changed size during iteration" not in str(exc):
                 raise
-            setTheme(theme, lazy=False)
-            setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=False)
+            if not theme_state_unchanged:
+                setTheme(theme, lazy=False)
+                setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=False)
+        if app is not None and not theme_state_unchanged:
+            app.setProperty("_ankismart_theme_mode", theme_name)
+            app.setProperty("_ankismart_theme_color", FIXED_THEME_ACCENT_HEX)
         if apply_stylesheet:
             self._apply_global_stylesheet()
 

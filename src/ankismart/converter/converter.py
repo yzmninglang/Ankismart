@@ -10,8 +10,8 @@ from ankismart.converter import (
     text_converter,
 )
 from ankismart.converter.cache import (
+    build_conversion_cache_key,
     get_cached_by_hash,
-    get_file_hash,
     save_cache,
     save_cache_by_hash,
 )
@@ -57,6 +57,31 @@ class DocumentConverter:
         self._ocr_cloud_endpoint = ocr_cloud_endpoint
         self._ocr_cloud_api_key = ocr_cloud_api_key
         self._proxy_url = proxy_url
+
+    def _get_cache_key(self, file_path: Path) -> str:
+        correction_fn = self._ocr_correction_fn
+        correction_fingerprint = ""
+        if correction_fn is not None:
+            correction_fingerprint = ":".join(
+                part
+                for part in (
+                    getattr(correction_fn, "__module__", ""),
+                    getattr(
+                        correction_fn,
+                        "__qualname__",
+                        getattr(correction_fn, "__name__", correction_fn.__class__.__name__),
+                    ),
+                )
+                if part
+            )
+
+        return build_conversion_cache_key(
+            file_path,
+            ocr_mode=self._ocr_mode,
+            cloud_provider=self._ocr_cloud_provider,
+            cloud_endpoint=self._ocr_cloud_endpoint,
+            ocr_correction_fingerprint=correction_fingerprint,
+        )
 
     @staticmethod
     def _resolve_converter(file_type: str, trace_id: str) -> Callable:
@@ -104,7 +129,7 @@ class DocumentConverter:
                     )
 
                 # Check file-hash cache first
-                file_hash = get_file_hash(file_path)
+                file_hash = self._get_cache_key(file_path)
                 cached = get_cached_by_hash(file_hash)
                 if cached is not None:
                     metrics.record_cache_hit()

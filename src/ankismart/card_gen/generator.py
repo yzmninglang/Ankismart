@@ -107,6 +107,46 @@ class CardGenerator:
             return self._llm.chat(system_prompt, user_prompt, timeout=timeout)
         return self._llm.chat(system_prompt, user_prompt)
 
+    @staticmethod
+    def _hard_split_text(text: str, threshold: int) -> list[str]:
+        value = str(text or "")
+        if threshold <= 0 or len(value) <= threshold:
+            return [value]
+
+        parts: list[str] = []
+        start = 0
+        while start < len(value):
+            parts.append(value[start : start + threshold])
+            start += threshold
+        return [part for part in parts if part]
+
+    def _split_code_block(self, code_block_buffer: list[str], threshold: int) -> list[str]:
+        if not code_block_buffer:
+            return []
+
+        if len(code_block_buffer) == 1 and "\n" in code_block_buffer[0]:
+            raw_lines = code_block_buffer[0].splitlines()
+            opening = raw_lines[0]
+            if len(raw_lines) > 1 and raw_lines[-1].strip() == "```":
+                closing = raw_lines[-1].strip()
+                body = "\n".join(raw_lines[1:-1])
+            else:
+                closing = "```"
+                body = "\n".join(raw_lines[1:])
+        else:
+            opening = code_block_buffer[0]
+            closing = code_block_buffer[-1] if len(code_block_buffer) > 1 else "```"
+            body = "\n\n".join(code_block_buffer[1:-1] if len(code_block_buffer) > 1 else [])
+
+        if len(f"{opening}\n{body}\n{closing}") <= threshold:
+            return [f"{opening}\n{body}\n{closing}".strip()]
+
+        max_body_length = max(1, threshold - len(opening) - len(closing) - 2)
+        return [
+            f"{opening}\n{piece}\n{closing}"
+            for piece in self._hard_split_text(body, max_body_length)
+        ]
+
     def _split_markdown(self, markdown: str, threshold: int) -> list[str]:
         """Split markdown content into chunks at paragraph boundaries.
 
@@ -155,7 +195,7 @@ class CardGenerator:
                             chunks.append("\n\n".join(current_chunk))
                             current_chunk = []
                             current_length = 0
-                        chunks.append(complete_block)
+                        chunks.extend(self._split_code_block(code_block_buffer, threshold))
                     else:
                         # Try to add to current chunk
                         if current_length + len(complete_block) > threshold:
@@ -197,8 +237,14 @@ class CardGenerator:
                     if sentence_length + len(sentence) > threshold:
                         if sentence_chunk:
                             chunks.append("".join(sentence_chunk))
-                        sentence_chunk = [sentence]
-                        sentence_length = len(sentence)
+                        if len(sentence) > threshold:
+                            for piece in self._hard_split_text(sentence, threshold):
+                                chunks.append(piece)
+                            sentence_chunk = []
+                            sentence_length = 0
+                        else:
+                            sentence_chunk = [sentence]
+                            sentence_length = len(sentence)
                     else:
                         sentence_chunk.append(sentence)
                         sentence_length += len(sentence)
@@ -219,12 +265,19 @@ class CardGenerator:
 
         # Add remaining content
         if code_block_buffer:
-            # Unclosed code block
-            remaining = "\n\n".join(code_block_buffer)
-            if current_chunk:
-                current_chunk.append(remaining)
+            trailing_chunks = self._split_code_block(code_block_buffer, threshold)
+            if len(trailing_chunks) == 1 and len(trailing_chunks[0]) <= threshold:
+                if current_chunk and current_length + len(trailing_chunks[0]) <= threshold:
+                    current_chunk.append(trailing_chunks[0])
+                else:
+                    if current_chunk:
+                        chunks.append("\n\n".join(current_chunk))
+                    current_chunk = trailing_chunks
             else:
-                current_chunk = [remaining]
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                    current_chunk = []
+                chunks.extend(trailing_chunks)
 
         if current_chunk:
             chunks.append("\n\n".join(current_chunk))
@@ -355,6 +408,8 @@ class CardGenerator:
                         all_drafts.extend(chunk_drafts)
                         if remaining_target > 0:
                             remaining_target = max(0, remaining_target - len(chunk_drafts))
+                            if auto_target_count and request.target_count > 0:
+                                remaining_target = max(1, remaining_target)
                             if remaining_target <= 0 and not auto_target_count:
                                 break
 

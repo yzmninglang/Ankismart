@@ -346,6 +346,8 @@ def load_config() -> AppConfig:
             config.ocr_mode = "local"
         if config.llm_concurrency_max < 1:
             config.llm_concurrency_max = 1
+        if config.llm_concurrency < 0:
+            config.llm_concurrency = 0
         if config.llm_concurrency > config.llm_concurrency_max:
             config.llm_concurrency = config.llm_concurrency_max
         if config.card_quality_min_chars < 1:

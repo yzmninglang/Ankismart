@@ -120,3 +120,37 @@ def test_convert_pdf_progress_callback_falls_back_to_message_only(
 
     assert result.content == "ok"
     assert progress_messages == ["OCR 识别完成，共 3 页"]
+
+
+def test_convert_pdf_cache_key_includes_runtime_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    file_path = tmp_path / "sample.pdf"
+    file_path.write_bytes(b"%PDF")
+    requested_keys: list[str] = []
+
+    monkeypatch.setattr("ankismart.converter.converter.save_cache", lambda _: None)
+    monkeypatch.setattr("ankismart.converter.converter.save_cache_by_hash", lambda *_: None)
+    monkeypatch.setattr("ankismart.converter.converter.detect_file_type", lambda _: "pdf")
+    monkeypatch.setattr(
+        "ankismart.converter.converter.get_cached_by_hash",
+        lambda key: requested_keys.append(key) or None,
+    )
+
+    def fake_pdf_convert(_: Path, trace_id: str, **__) -> MarkdownResult:
+        return MarkdownResult(content=trace_id, source_path="sample.pdf", source_format="pdf")
+
+    monkeypatch.setattr(
+        DocumentConverter, "_resolve_converter", staticmethod(lambda *_: fake_pdf_convert)
+    )
+
+    DocumentConverter(ocr_mode="local").convert(file_path)
+    DocumentConverter(
+        ocr_mode="cloud",
+        ocr_cloud_provider="mineru",
+        ocr_cloud_endpoint="https://mineru.net",
+    ).convert(file_path)
+
+    assert len(requested_keys) == 2
+    assert requested_keys[0] != requested_keys[1]

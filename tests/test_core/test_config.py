@@ -227,6 +227,19 @@ class TestLoadConfig:
         assert cfg.ocr_quality_min_chars == 10
         assert cfg.semantic_duplicate_threshold == 0.6
 
+    def test_load_clamps_negative_llm_concurrency_to_auto(self, tmp_path: Path):
+        config_file = tmp_path / "config.yaml"
+        data = {
+            "llm_concurrency": -5,
+            "llm_concurrency_max": 6,
+        }
+        config_file.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+        with patch("ankismart.core.config.CONFIG_PATH", config_file):
+            cfg = load_config()
+
+        assert cfg.llm_concurrency == 0
+
     def test_load_plain_config_without_touching_crypto(self, tmp_path: Path, monkeypatch):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(yaml.safe_dump({"default_deck": "PlainDeck"}), encoding="utf-8")

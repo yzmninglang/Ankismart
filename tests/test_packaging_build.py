@@ -156,11 +156,17 @@ def test_installer_script_uses_directory_page_and_finish_page_options() -> None:
     assert "DesktopIconCheck := TNewCheckBox.Create(WizardForm.FinishedPage)" in content
     assert "DesktopIconCheck.Checked := True" in content
     assert "DesktopIconCheck.Height := ScaleY(26)" in content
-    assert "DesktopIconCheck.Top := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(16)" in content
+    assert (
+        "DesktopIconCheck.Top := WizardForm.FinishedLabel.Top + "
+        "WizardForm.FinishedLabel.Height + ScaleY(16)"
+    ) in content
     assert "LaunchAppCheck := TNewCheckBox.Create(WizardForm.FinishedPage)" in content
     assert "LaunchAppCheck.Checked := False" in content
     assert "LaunchAppCheck.Height := ScaleY(26)" in content
-    assert "LaunchAppCheck.Top := DesktopIconCheck.Top + DesktopIconCheck.Height + ScaleY(6)" in content
+    assert (
+        "LaunchAppCheck.Top := DesktopIconCheck.Top + "
+        "DesktopIconCheck.Height + ScaleY(6)"
+    ) in content
     assert "WizardForm.RunList.Visible := False" in content
     assert "WizardForm.RunList.Height := 0" in content
     assert "WizardForm.RunList.Checked[0] := LaunchAppCheck.Checked" in content

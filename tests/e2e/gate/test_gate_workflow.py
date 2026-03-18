@@ -146,5 +146,6 @@ def test_gate_real_push_failure_then_export_apkg(window, e2e_files, tmp_path: Pa
         lambda *args, **kwargs: (str(export_path), "Anki Package (*.apkg)"),
     )
     result_page.export_apkg()
+    _wait_until(export_path.exists)
     assert export_path.exists()
     assert export_path.stat().st_size > 0

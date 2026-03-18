@@ -4,6 +4,7 @@ import pytest
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication
 
+import ankismart.ui.result_page as result_page_module
 from ankismart.core.models import CardDraft, CardPushStatus, PushResult
 from ankismart.ui.card_edit_widget import CardEditWidget
 from ankismart.ui.result_page import ResultPage
@@ -355,6 +356,25 @@ def test_export_apkg_uses_export_worker(monkeypatch, _qapp, tmp_path) -> None:
     created["worker"].progress.emit("正在导出 1 张卡片到 APKG")
 
     assert "导出" in page._status_label.text()
+
+
+def test_create_apkg_exporter_supports_string_path_monkeypatch(monkeypatch, tmp_path) -> None:
+    calls = {}
+
+    def _fake_export(self, cards, output_path):
+        calls["cards"] = cards
+        calls["path"] = output_path
+        return output_path
+
+    monkeypatch.setattr("ankismart.ui.result_page.ApkgExporter.export", _fake_export)
+
+    exporter = result_page_module._create_apkg_exporter()
+    output_path = tmp_path / "patched.apkg"
+    result = exporter.export([_make_card()], output_path)
+
+    assert result == output_path
+    assert calls["cards"][0].fields["Front"] == "Q"
+    assert calls["path"] == output_path
 
 
 def test_retry_failed_updates_persistent_push_status(monkeypatch, _qapp) -> None:

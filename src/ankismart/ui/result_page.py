@@ -50,7 +50,7 @@ from ankismart.ui.styles import (
 from ankismart.ui.workers import ExportWorker, PushWorker
 
 logger = logging.getLogger(__name__)
-ApkgExporter = None
+_REAL_APKG_EXPORTER_CLASS = None
 AnkiConnectClient = None
 AnkiGateway = None
 
@@ -70,13 +70,28 @@ def _load_gateway_classes():
 
 
 def _load_apkg_exporter_class():
-    exporter_class = globals().get("ApkgExporter")
+    exporter_class = globals().get("_REAL_APKG_EXPORTER_CLASS")
     if exporter_class is None:
-        from ankismart.anki_gateway.apkg_exporter import ApkgExporter
+        from ankismart.anki_gateway.apkg_exporter import ApkgExporter as _ApkgExporter
 
-        exporter_class = ApkgExporter
-        globals()["ApkgExporter"] = exporter_class
+        exporter_class = _ApkgExporter
+        globals()["_REAL_APKG_EXPORTER_CLASS"] = exporter_class
     return exporter_class
+
+
+class ApkgExporter:
+    """Lazy proxy that keeps monkeypatch targets stable for UI tests."""
+
+    def __init__(self) -> None:
+        self._exporter = None
+
+    def _get_exporter(self):
+        if self._exporter is None:
+            self._exporter = _load_apkg_exporter_class()()
+        return self._exporter
+
+    def export(self, cards, output_path):
+        return self._get_exporter().export(cards, output_path)
 
 
 def _create_push_gateway(config) -> object:
@@ -90,8 +105,7 @@ def _create_push_gateway(config) -> object:
 
 
 def _create_apkg_exporter():
-    exporter_class = _load_apkg_exporter_class()
-    return exporter_class()
+    return ApkgExporter()
 
 
 class ResultPage(QWidget):

@@ -290,6 +290,7 @@ def patch_batch_generate_worker(monkeypatch):
                 self._deck_name = deck_name
                 self._tags = tags
                 self.progress = _SignalStub()
+                self.warning = _SignalStub()
                 self.card_progress = _SignalStub()
                 self.document_completed = _SignalStub()
                 self.finished = _SignalStub()

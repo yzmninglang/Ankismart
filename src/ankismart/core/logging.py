@@ -96,9 +96,9 @@ def _resolve_log_dir() -> Path:
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        from ankismart.core.tracing import get_trace_id
+        from ankismart.core.tracing import generate_trace_id, peek_trace_id
 
-        trace_id = getattr(record, "trace_id", None) or get_trace_id()
+        trace_id = getattr(record, "trace_id", None) or peek_trace_id() or generate_trace_id()
         entry: dict[str, object] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
@@ -126,11 +126,11 @@ class JsonFormatter(logging.Formatter):
 
 class ConsoleFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        from ankismart.core.tracing import get_trace_id
+        from ankismart.core.tracing import generate_trace_id, peek_trace_id
 
         ts = datetime.now().strftime("%H:%M:%S")
         module = record.name.replace("ankismart.", "")
-        trace_id = getattr(record, "trace_id", None) or get_trace_id()
+        trace_id = getattr(record, "trace_id", None) or peek_trace_id() or generate_trace_id()
         trace_short = str(trace_id).split("-", 1)[0][:8]
         extras = _collect_extra_fields(record)
         event = extras.pop("event", None)

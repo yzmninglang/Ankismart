@@ -1036,12 +1036,18 @@ class PreviewPage(ProgressMixin, QWidget):
 
     def _configure_state_tooltip(self, tooltip: StateToolTip) -> None:
         window = self.window() or self
-        max_width = min(720, max(380, max(window.width(), self.width()) - 48))
-        min_height = 108
+        base_width = max(window.width(), self.width())
+        max_width = min(820, max(440, base_width - 96))
+        preferred_width = min(max_width, max(520, int(base_width * 0.42)))
+        min_height = 132
 
         set_max_width = getattr(tooltip, "setMaximumWidth", None)
         if callable(set_max_width):
             set_max_width(max_width)
+
+        set_min_width = getattr(tooltip, "setMinimumWidth", None)
+        if callable(set_min_width):
+            set_min_width(preferred_width)
 
         set_min_height = getattr(tooltip, "setMinimumHeight", None)
         if callable(set_min_height):
@@ -1062,18 +1068,18 @@ class PreviewPage(ProgressMixin, QWidget):
         if callable(adjust_size):
             adjust_size()
 
-        tooltip_width = max_width
+        tooltip_width = preferred_width
         size_hint = getattr(tooltip, "sizeHint", None)
         if callable(size_hint):
             hint = size_hint()
             hint_width = getattr(hint, "width", None)
             if callable(hint_width):
-                tooltip_width = min(max_width, max(380, hint_width()))
+                tooltip_width = min(max_width, max(preferred_width, hint_width()))
 
         move = getattr(tooltip, "move", None)
         if callable(move):
-            x = max(16, window.width() - tooltip_width - 24)
-            move(QPoint(x, 24))
+            x = max(24, window.width() - tooltip_width - 56)
+            move(QPoint(x, 36))
 
     def _finish_state_tooltip(self, success: bool, content: str) -> None:
         """Finish workflow state tooltip and clear reference."""

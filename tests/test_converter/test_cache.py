@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import ankismart.converter.cache as cache_module
 from ankismart.converter.cache import (
+    build_conversion_cache_key,
     clear_cache,
     get_cache_count,
     get_cache_size,
@@ -220,6 +221,20 @@ class TestGetFileHash:
 
 
 class TestHashCache:
+    def test_build_conversion_cache_key_changes_with_runtime_options(self, tmp_path: Path) -> None:
+        file_path = tmp_path / "sample.pdf"
+        file_path.write_bytes(b"pdf")
+
+        local = build_conversion_cache_key(file_path, ocr_mode="local")
+        cloud = build_conversion_cache_key(
+            file_path,
+            ocr_mode="cloud",
+            cloud_provider="mineru",
+            cloud_endpoint="https://mineru.net",
+        )
+
+        assert local != cloud
+
     def test_save_and_get_cached_by_hash_roundtrip(self, tmp_path: Path) -> None:
         cache_dir = tmp_path / "cache"
         result = MarkdownResult(

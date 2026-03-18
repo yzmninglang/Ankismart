@@ -138,6 +138,18 @@ class TestBuildCardDrafts:
         assert drafts[0].trace_id == "t-123"
         assert drafts[0].fields == {"Front": "Q1", "Back": "A1"}
 
+    def test_basic_alias_fields_are_normalized(self):
+        drafts = build_card_drafts(
+            raw_cards=[{"Question": "Q1", "Answer": "A1"}],
+            deck_name="TestDeck",
+            note_type="Basic",
+            tags=["tag1"],
+            trace_id="t-123",
+        )
+
+        assert len(drafts) == 1
+        assert drafts[0].fields == {"Front": "Q1", "Back": "A1"}
+
     def test_cloze_valid_cards(self):
         raw = [
             {"Text": "The {{c1::sun}} is a star.", "Extra": ""},

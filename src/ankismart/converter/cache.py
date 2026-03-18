@@ -76,6 +76,30 @@ def get_file_hash(path: Path) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def build_conversion_cache_key(
+    path: Path,
+    *,
+    ocr_mode: str = "local",
+    cloud_provider: str = "",
+    cloud_endpoint: str = "",
+    ocr_correction_fingerprint: str = "",
+) -> str:
+    """Build a cache key that includes conversion-affecting runtime options."""
+    file_hash = get_file_hash(path)
+    context = {
+        "ocr_mode": str(ocr_mode or "local").strip().lower(),
+        "cloud_provider": str(cloud_provider or "").strip().lower(),
+        "cloud_endpoint": str(cloud_endpoint or "").strip().rstrip("/"),
+        "ocr_correction_fingerprint": str(ocr_correction_fingerprint or "").strip(),
+    }
+    raw = json.dumps(
+        {"file_hash": file_hash, "context": context},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def get_cached_by_hash(file_hash: str) -> MarkdownResult | None:
     """Retrieve cached conversion result by file hash."""
     md_path = CACHE_DIR / f"fh_{file_hash}.md"

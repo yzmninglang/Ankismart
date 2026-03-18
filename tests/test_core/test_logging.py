@@ -115,6 +115,19 @@ class TestJsonFormatter:
         finally:
             _trace_id_var.reset(token)
 
+    def test_format_does_not_mutate_empty_trace_context(self):
+        from ankismart.core.tracing import _trace_id_var
+
+        token = _trace_id_var.set(None)
+        try:
+            fmt = JsonFormatter()
+            record = self._make_record("isolated")
+            parsed = json.loads(fmt.format(record))
+            assert parsed["trace_id"]
+            assert _trace_id_var.get() is None
+        finally:
+            _trace_id_var.reset(token)
+
     def test_internal_fields_excluded(self):
         fmt = JsonFormatter()
         record = self._make_record("check exclusions")

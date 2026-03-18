@@ -27,7 +27,7 @@ def test_build_generation_config_single_mode() -> None:
     config = ImportPage.build_generation_config(page)
 
     assert config["mode"] == "mixed"
-    assert config["target_total"] == 0
+    assert config["target_total"] == 20
     assert config["auto_target_count"] is True
     assert config["strategy_mix"] == [{"strategy": "basic", "ratio": 100}]
 

@@ -785,7 +785,11 @@ def test_batch_generate_worker_estimates_auto_target_total_from_document_size() 
     ]
     worker = BatchGenerateWorker(
         documents=docs,
-        generation_config={"target_total": 0, "auto_target_count": True, "strategy_mix": [{"strategy": "basic", "ratio": 1}]},
+        generation_config={
+            "target_total": 0,
+            "auto_target_count": True,
+            "strategy_mix": [{"strategy": "basic", "ratio": 1}],
+        },
         llm_client=object(),
         deck_name="Default",
         tags=[],

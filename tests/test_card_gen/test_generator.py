@@ -130,12 +130,10 @@ class TestCardGeneratorGenerate:
         assert len(drafts) == 1
 
     def test_auto_target_count_uses_soft_prompt_and_does_not_trim(self):
-        captured: dict[str, str] = {}
+        prompts: list[str] = []
 
         def _fake_llm(system_prompt: str, user_prompt: str, timeout: float | None = None) -> str:
-            captured["system_prompt"] = system_prompt
-            captured["user_prompt"] = user_prompt
-            captured["timeout"] = str(timeout)
+            prompts.append(system_prompt)
             return json.dumps(
                 [
                     {"Front": "Q1", "Back": "A1"},
@@ -156,10 +154,11 @@ class TestCardGeneratorGenerate:
 
         drafts = gen.generate(request)
 
-        assert "Generate exactly 2 cards" not in captured["system_prompt"]
-        assert "Generate around 2 cards" in captured["system_prompt"]
-        assert "cover all important knowledge points" in captured["system_prompt"]
-        assert len(drafts) == 3
+        assert prompts
+        assert all("Generate exactly 2 cards" not in prompt for prompt in prompts)
+        assert any("Generate around" in prompt for prompt in prompts)
+        assert any("cover all important knowledge points" in prompt for prompt in prompts)
+        assert len(drafts) >= 3
 
     def test_image_qa_attaches_image(self, tmp_path):
         img_path = tmp_path / "diagram.png"
@@ -307,6 +306,24 @@ class TestSplitMarkdown:
         assert len(chunks) >= 2
         assert any("```python" in chunk for chunk in chunks)
         assert any("```sql" in chunk for chunk in chunks)
+
+    def test_split_markdown_keeps_long_code_block_within_threshold(self):
+        gen = _make_generator()
+        content = "```python\n" + ("x" * 120) + "\n```"
+
+        chunks = gen._split_markdown(content, threshold=40)
+
+        assert all(len(chunk) <= 40 for chunk in chunks)
+        assert all(chunk.startswith("```python") for chunk in chunks)
+
+    def test_split_markdown_hard_splits_single_long_sentence(self):
+        gen = _make_generator()
+        content = "A" * 120
+
+        chunks = gen._split_markdown(content, threshold=40)
+
+        assert all(len(chunk) <= 40 for chunk in chunks)
+        assert "".join(chunks) == content
 
     def test_generate_uses_chunk_mode_when_auto_split_enabled(self):
         gen = _make_generator(chat_side_effect=_fake_llm_basic)

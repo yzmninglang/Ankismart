@@ -69,6 +69,25 @@ def _has_required_fields(card: dict, note_type: str) -> bool:
     return bool(card)
 
 
+def _normalize_card_fields(card: dict, note_type: str) -> dict[str, object]:
+    normalized = dict(card)
+    normalized_note_type = (note_type or "").strip()
+
+    if normalized_note_type in {"Basic", "AnkiSmart Basic"} or normalized_note_type.startswith(
+        "Basic"
+    ):
+        front = str(normalized.get("Front", "") or normalized.get("Question", "")).strip()
+        back = str(normalized.get("Back", "") or normalized.get("Answer", "")).strip()
+        if front:
+            normalized["Front"] = front
+        if back:
+            normalized["Back"] = back
+        normalized.pop("Question", None)
+        normalized.pop("Answer", None)
+
+    return normalized
+
+
 def build_card_drafts(
     raw_cards: list[dict],
     deck_name: str,
@@ -92,11 +111,13 @@ def build_card_drafts(
             )
             continue
 
+        normalized_fields = _normalize_card_fields(card, note_type)
+
         draft = CardDraft(
             trace_id=trace_id,
             deck_name=deck_name,
             note_type=note_type,
-            fields=card,
+            fields=normalized_fields,
             tags=tags,
             metadata=CardMetadata(source_format=source_format),
         )

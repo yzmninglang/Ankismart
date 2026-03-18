@@ -63,7 +63,7 @@ from ankismart.ui.styles import (
     SPACING_MEDIUM,
     SPACING_SMALL,
 )
-from ankismart.ui.utils import ProgressMixin, split_tags_text
+from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_text
 from ankismart.ui.workers import BatchConvertWorker
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
@@ -1065,10 +1065,7 @@ class ImportPage(ProgressMixin, QWidget):
             from ankismart.card_gen.generator import CardGenerator
             from ankismart.card_gen.llm_client import LLMClient
 
-            llm_client = LLMClient(
-                provider=self._main.config.card_gen_provider,
-                llm_providers=self._main.config.llm_providers,
-            )
+            llm_client = LLMClient.from_config(self._main.config)
             self._card_generator = CardGenerator(llm_client)
         return self._card_generator
 
@@ -2037,13 +2034,10 @@ class ImportPage(ProgressMixin, QWidget):
                 strategy_mix.append({"strategy": strategy_id, "ratio": ratio})
 
         auto_target_count = self._is_auto_target_count_enabled()
-        if auto_target_count:
-            target_total = 0
-        else:
-            try:
-                target_total = int(self._total_count_input.text())
-            except ValueError:
-                target_total = 20
+        try:
+            target_total = int(self._total_count_input.text())
+        except ValueError:
+            target_total = 20
 
         return {
             "mode": "mixed",
@@ -2051,6 +2045,19 @@ class ImportPage(ProgressMixin, QWidget):
             "auto_target_count": auto_target_count,
             "strategy_mix": strategy_mix,
         }
+
+    def _refresh_conversion_hint(self) -> None:
+        label = self.__dict__.get("_performance_hint_label")
+        if label is None or not hasattr(label, "setText"):
+            return
+
+        label.setText(
+            format_operation_hint(
+                self._main.config,
+                event="convert",
+                language=self._main.config.language,
+            )
+        )
 
     def _on_file_progress(self, filename: str, current: int, total: int):
         """Handle file conversion progress."""

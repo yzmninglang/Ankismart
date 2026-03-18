@@ -467,7 +467,7 @@ def test_generation_warning_shows_visible_infobar(monkeypatch):
             "_InfoBarStub",
             (),
             {
-                "warning": staticmethod(lambda *a, **k: warnings.append(kwargs := k)),
+                "warning": staticmethod(lambda *a, **k: warnings.append(k)),
                 "success": staticmethod(lambda *a, **k: None),
                 "info": staticmethod(lambda *a, **k: None),
                 "error": staticmethod(lambda *a, **k: None),
@@ -492,6 +492,7 @@ def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
             self.content = content
             self.parent = parent
             self.max_width = None
+            self.min_width = None
             self.min_height = None
             self.position = None
             self.shown = False
@@ -501,6 +502,9 @@ def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
 
         def setMaximumWidth(self, width):
             self.max_width = width
+
+        def setMinimumWidth(self, width):
+            self.min_width = width
 
         def setMinimumHeight(self, height):
             self.min_height = height
@@ -539,10 +543,11 @@ def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
 
     tooltip = page._state_tooltip
     assert tooltip is not None
-    assert tooltip.max_width == 720
-    assert tooltip.min_height == 108
+    assert tooltip.max_width == 820
+    assert tooltip.min_width == 520
+    assert tooltip.min_height == 132
     assert tooltip.contentLabel.wordWrap() is True
-    assert tooltip.position == (756, 24)
+    assert tooltip.position == (624, 36)
     assert tooltip.used_suitable_pos is False
     assert tooltip.shown is True
 
