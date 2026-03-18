@@ -15,6 +15,7 @@ from .import_page_test_utils import (
     DummyLineEdit,
     DummyModeCombo,
     DummySlider,
+    DummySwitch,
     make_page,
     patch_infobar,
 )
@@ -26,12 +27,14 @@ def test_build_generation_config_single_mode() -> None:
     config = ImportPage.build_generation_config(page)
 
     assert config["mode"] == "mixed"
-    assert config["target_total"] == 20
+    assert config["target_total"] == 0
+    assert config["auto_target_count"] is True
     assert config["strategy_mix"] == [{"strategy": "basic", "ratio": 100}]
 
 
 def test_build_generation_config_mixed_mode() -> None:
     page = make_page()
+    page._auto_target_count_switch = DummySwitch(False)
     page._total_count_input = DummyLineEdit("30")
     page._total_count_mode_combo = DummyModeCombo("custom")
     page._strategy_sliders = [
@@ -44,6 +47,7 @@ def test_build_generation_config_mixed_mode() -> None:
 
     assert config["mode"] == "mixed"
     assert config["target_total"] == 30
+    assert config["auto_target_count"] is False
     assert config["strategy_mix"] == [
         {"strategy": "basic", "ratio": 50},
         {"strategy": "cloze", "ratio": 30},

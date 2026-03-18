@@ -121,6 +121,37 @@ def test_choice_preview_keeps_question_answer_structure() -> None:
     assert 'class="flat-block flat-explain"' in html
 
 
+def test_choice_preview_uses_line_by_line_answer_and_explanation_layout() -> None:
+    card = CardDraft(
+        note_type="Basic",
+        tags=["multiple_choice"],
+        fields={
+            "Front": (
+                "下列关于线程的说法哪些正确？\n"
+                "A. 线程共享进程地址空间\n"
+                "B. 线程拥有彼此完全独立的地址空间\n"
+                "C. 线程切换开销通常小于进程\n"
+                "D. 线程间通信必须经过网络"
+            ),
+            "Back": (
+                "答案：A, C\n"
+                "解析:\n"
+                "A. 同一进程内的线程通常共享地址空间。\n"
+                "B. 独立地址空间对应的是进程，不是线程。\n"
+                "C. 线程切换通常比进程切换更轻量。\n"
+                "D. 线程间通信可直接依赖共享内存与同步机制。"
+            ),
+        },
+    )
+
+    html = CardRenderer.render_card(card)
+
+    assert html.count('class="flat-answer-item"') == 2
+    assert html.count('class="flat-explain-item"') >= 4
+    assert 'class="flat-answer-key">A</span>' in html
+    assert 'class="flat-answer-key">C</span>' in html
+
+
 def test_card_preview_inserts_visual_spacers_between_sections() -> None:
     card = CardDraft(
         note_type="Basic",
@@ -142,6 +173,40 @@ def test_choice_back_prefixed_answer_is_split() -> None:
 
     assert keys == ["B"]
     assert "共线区段" in explanation
+
+
+def test_concept_preview_highlights_focus_keyword_and_sections() -> None:
+    card = CardDraft(
+        note_type="Basic",
+        tags=["concept"],
+        fields={
+            "Front": "CAP 定理",
+            "Back": (
+                "答案：分布式系统中一致性、可用性与分区容错性的权衡。\n"
+                "解析：核心：发生分区时必须做取舍。\n"
+                "关键场景：网络不稳定或跨机房部署。"
+            ),
+        },
+    )
+
+    html = CardRenderer.render_card(card)
+
+    assert 'class="flat-focus-line"' in html
+    assert 'class="flat-keyword">核心</span>' in html
+    assert 'class="flat-keyword">关键场景</span>' in html
+
+
+def test_cloze_preview_renders_answer_entries_as_structured_rows() -> None:
+    card = CardDraft(
+        note_type="Cloze",
+        fields={"Text": "地球是太阳系第 {{c1::三}} 颗行星，简称 {{c2::蓝星::别称}}。"},
+    )
+
+    html = CardRenderer.render_card(card)
+
+    assert html.count('class="flat-answer-item"') >= 2
+    assert 'class="flat-answer-key">C1</span>' in html
+    assert 'class="flat-answer-key">C2</span>' in html
 
 
 def test_card_preview_push_finished_navigates_to_result(monkeypatch) -> None:

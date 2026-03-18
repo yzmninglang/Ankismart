@@ -455,6 +455,32 @@ def test_push_card_progress_updates_state_tooltip(monkeypatch):
     assert calls == [("正在推送到 Anki", "已完成 2/5")]
 
 
+def test_generation_warning_shows_visible_infobar(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+    warnings: list[dict] = []
+
+    monkeypatch.setattr(
+        "ankismart.ui.preview_page.InfoBar",
+        type(
+            "_InfoBarStub",
+            (),
+            {
+                "warning": staticmethod(lambda *a, **k: warnings.append(kwargs := k)),
+                "success": staticmethod(lambda *a, **k: None),
+                "info": staticmethod(lambda *a, **k: None),
+                "error": staticmethod(lambda *a, **k: None),
+            },
+        ),
+    )
+
+    page._on_generation_warning("生成过程中存在超时，已返回部分可用卡片。")
+
+    assert len(warnings) == 1
+    assert "超时" in warnings[0]["content"]
+
+
 def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"

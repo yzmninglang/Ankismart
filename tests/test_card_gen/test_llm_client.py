@@ -320,6 +320,20 @@ class TestLLMClientValidateConnection:
         assert "validate connection" in exc_info.value.message
 
 
+class TestLLMClientDynamicTimeout:
+    @patch("ankismart.card_gen.llm_client.OpenAI")
+    def test_chat_accepts_timeout_override(self, mock_openai_cls):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+        mock_client.chat.completions.create.return_value = _make_response("OK")
+
+        client = LLMClient(api_key="sk-test")
+        assert client.chat("sys", "usr", timeout=180) == "OK"
+
+        call_kwargs = mock_client.chat.completions.create.call_args[1]
+        assert call_kwargs["timeout"] == 180
+
+
 class TestLLMClientProxy:
     """Tests for proxy_url parameter passing."""
 

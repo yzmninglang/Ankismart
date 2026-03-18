@@ -122,10 +122,12 @@ def test_convert_worker_cancelled_during_progress_does_not_emit_finished() -> No
 def test_generate_worker_success_emits_finished() -> None:
     events: list[str] = []
     finished: list[list] = []
+    auto_flags: list[bool] = []
 
     class _FakeGenerator:
         def generate(self, request):
             events.append(request.strategy)
+            auto_flags.append(request.auto_target_count)
             return []
 
     markdown = MarkdownResult(
@@ -146,6 +148,7 @@ def test_generate_worker_success_emits_finished() -> None:
     worker.run()
 
     assert events == ["basic"]
+    assert auto_flags == [False]
     assert finished == [[]]
 
 
@@ -766,6 +769,75 @@ def test_batch_generate_worker_zero_concurrency_uses_document_count(monkeypatch)
     worker.run()
 
     assert captured["max_workers"] == len(docs)
+
+
+def test_batch_generate_worker_estimates_auto_target_total_from_document_size() -> None:
+    docs = [
+        ConvertedDocument(
+            result=MarkdownResult(
+                content=("知识点 " * 9000),
+                source_path="long.md",
+                source_format="markdown",
+                trace_id="trace-auto-target",
+            ),
+            file_name="long.md",
+        )
+    ]
+    worker = BatchGenerateWorker(
+        documents=docs,
+        generation_config={"target_total": 0, "auto_target_count": True, "strategy_mix": [{"strategy": "basic", "ratio": 1}]},
+        llm_client=object(),
+        deck_name="Default",
+        tags=[],
+        enable_auto_split=True,
+        split_threshold=7000,
+    )
+
+    estimated = worker._estimate_auto_target_total()
+
+    assert estimated >= 12
+
+
+def test_batch_generate_worker_emits_warning_when_partial_timeout_has_cards(monkeypatch) -> None:
+    doc = ConvertedDocument(
+        result=MarkdownResult(
+            content="demo",
+            source_path="a.md",
+            source_format="markdown",
+            trace_id="trace-partial-timeout",
+        ),
+        file_name="a.md",
+    )
+
+    def _generate(_self, request):
+        if request.strategy == "basic":
+            return [CardDraft(fields={"Front": "Q1", "Back": "A1"}, note_type="Basic")]
+        raise CardGenError("timeout", code=ErrorCode.E_LLM_ERROR, trace_id="trace-partial-timeout")
+
+    monkeypatch.setattr("ankismart.ui.workers.CardGenerator.generate", _generate)
+
+    worker = BatchGenerateWorker(
+        documents=[doc],
+        generation_config={
+            "target_total": 2,
+            "strategy_mix": [{"strategy": "basic", "ratio": 1}, {"strategy": "cloze", "ratio": 1}],
+        },
+        llm_client=object(),
+        deck_name="Default",
+        tags=[],
+        config=SimpleNamespace(language="zh"),
+    )
+
+    warnings: list[str] = []
+    results: list[list[CardDraft]] = []
+    worker.warning.connect(warnings.append)
+    worker.finished.connect(results.append)
+    worker.run()
+
+    assert len(results) == 1
+    assert len(results[0]) == 1
+    assert len(warnings) == 1
+    assert "存在超时" in warnings[0]
 
 
 def test_batch_generate_worker_emits_structured_error_when_all_failed(monkeypatch) -> None:

@@ -28,12 +28,16 @@ class DummyCombo:
 class DummyLineEdit:
     def __init__(self, text: str) -> None:
         self._text = text
+        self.enabled = True
 
     def text(self) -> str:
         return self._text
 
     def setText(self, text: str) -> None:
         self._text = text
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802
+        self.enabled = enabled
 
 
 class DummyMain:
@@ -77,6 +81,21 @@ class DummySlider:
         return self._value
 
 
+class DummySwitch:
+    def __init__(self, checked: bool) -> None:
+        self._checked = checked
+        self.enabled = True
+
+    def isChecked(self) -> bool:  # noqa: N802
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802
+        self._checked = checked
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802
+        self.enabled = enabled
+
+
 class DummyListItem:
     def __init__(self, text: str) -> None:
         self._text = text
@@ -115,8 +134,9 @@ def make_page():
     page._strategy_sliders = [
         ("basic", DummySlider(100), None),
     ]
+    page._auto_target_count_switch = DummySwitch(True)
     page._total_count_input = DummyLineEdit("20")
-    page._total_count_mode_combo = DummyModeCombo("custom")
+    page._total_count_mode_combo = DummyModeCombo("auto")
     page._deck_combo = DummyCombo("Default")
     page._tags_input = DummyLineEdit("tag1, tag2")
     page._status_label = type("_Label", (), {"setText": lambda self, text: None})()

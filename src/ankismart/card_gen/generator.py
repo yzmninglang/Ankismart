@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -44,6 +45,67 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
 class CardGenerator:
     def __init__(self, llm_client: LLMClient) -> None:
         self._llm = llm_client
+
+    @staticmethod
+    def _build_target_instruction(target_count: int, *, auto_target_count: bool) -> str:
+        if target_count <= 0:
+            return ""
+        if auto_target_count:
+            return (
+                f"\n- Generate around {target_count} cards\n"
+                "- cover all important knowledge points while keeping the output concise\n"
+            )
+        return f"\n- Generate exactly {target_count} cards\n"
+
+    @staticmethod
+    def _estimate_request_timeout(
+        *,
+        content_length: int,
+        target_count: int,
+        chunk_count: int = 1,
+        auto_target_count: bool = False,
+    ) -> float:
+        base_timeout = 120.0
+        length_bonus = min(240.0, max(0.0, content_length / 1500.0))
+        target_bonus = min(180.0, max(0, target_count) * 10.0)
+        chunk_bonus = min(180.0, max(0, chunk_count - 1) * 25.0)
+        auto_bonus = 30.0 if auto_target_count else 0.0
+        return base_timeout + length_bonus + target_bonus + chunk_bonus + auto_bonus
+
+    def _chat_with_timeout(
+        self, system_prompt: str, user_prompt: str, *, timeout: float | None
+    ) -> str:
+        chat_fn = self._llm.chat
+        side_effect = getattr(chat_fn, "side_effect", None)
+        signature_target = side_effect if callable(side_effect) else chat_fn
+
+        supports_timeout = True
+        try:
+            parameters = inspect.signature(signature_target).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+
+        if parameters:
+            supports_timeout = False
+            positional_count = 0
+            for parameter in parameters:
+                if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                    supports_timeout = True
+                    break
+                if parameter.name == "timeout":
+                    supports_timeout = True
+                    break
+                if parameter.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                ):
+                    positional_count += 1
+            if positional_count >= 3:
+                supports_timeout = True
+
+        if supports_timeout and timeout is not None:
+            return self._llm.chat(system_prompt, user_prompt, timeout=timeout)
+        return self._llm.chat(system_prompt, user_prompt)
 
     def _split_markdown(self, markdown: str, threshold: int) -> list[str]:
         """Split markdown content into chunks at paragraph boundaries.
@@ -189,10 +251,13 @@ class CardGenerator:
 
                 base_system_prompt, note_type = strategy_info
                 markdown = request.markdown
+                auto_target_count = bool(getattr(request, "auto_target_count", False))
 
                 system_prompt = base_system_prompt
-                if request.target_count > 0:
-                    system_prompt += f"\n- Generate exactly {request.target_count} cards\n"
+                system_prompt += self._build_target_instruction(
+                    request.target_count,
+                    auto_target_count=auto_target_count,
+                )
 
                 logger.info(
                     "Generating cards",
@@ -227,7 +292,11 @@ class CardGenerator:
 
                     # Process each chunk
                     for i, chunk in enumerate(chunks, 1):
-                        if remaining_target <= 0 and request.target_count > 0:
+                        if (
+                            remaining_target <= 0
+                            and request.target_count > 0
+                            and not auto_target_count
+                        ):
                             break
 
                         logger.info(
@@ -246,13 +315,25 @@ class CardGenerator:
                             base_target = remaining_target // max(1, chunks_left)
                             extra_target = 1 if remaining_target % max(1, chunks_left) else 0
                             chunk_target = max(1, base_target + extra_target)
-                            chunk_system_prompt += (
-                                f"\n- Generate exactly {chunk_target} cards\n"
+                            chunk_system_prompt += self._build_target_instruction(
+                                chunk_target,
+                                auto_target_count=auto_target_count,
                             )
+
+                        request_timeout = self._estimate_request_timeout(
+                            content_length=len(chunk),
+                            target_count=chunk_target or request.target_count,
+                            chunk_count=len(chunks),
+                            auto_target_count=auto_target_count,
+                        )
 
                         # Call LLM for this chunk
                         with timed(f"llm_generate_chunk_{i}"):
-                            raw_output = self._llm.chat(chunk_system_prompt, chunk)
+                            raw_output = self._chat_with_timeout(
+                                chunk_system_prompt,
+                                chunk,
+                                timeout=request_timeout,
+                            )
 
                         # Parse and build card drafts for this chunk
                         raw_cards = parse_llm_output(raw_output)
@@ -264,20 +345,33 @@ class CardGenerator:
                             trace_id=trace_id,
                         )
 
-                        if chunk_target > 0 and len(chunk_drafts) > chunk_target:
+                        if (
+                            chunk_target > 0
+                            and not auto_target_count
+                            and len(chunk_drafts) > chunk_target
+                        ):
                             chunk_drafts = chunk_drafts[:chunk_target]
 
                         all_drafts.extend(chunk_drafts)
                         if remaining_target > 0:
                             remaining_target = max(0, remaining_target - len(chunk_drafts))
-                            if remaining_target <= 0:
+                            if remaining_target <= 0 and not auto_target_count:
                                 break
 
                     drafts = all_drafts
                 else:
+                    request_timeout = self._estimate_request_timeout(
+                        content_length=len(markdown),
+                        target_count=request.target_count,
+                        auto_target_count=auto_target_count,
+                    )
                     # Normal processing without split
                     with timed("llm_generate"):
-                        raw_output = self._llm.chat(system_prompt, markdown)
+                        raw_output = self._chat_with_timeout(
+                            system_prompt,
+                            markdown,
+                            timeout=request_timeout,
+                        )
 
                     # Parse and build card drafts
                     raw_cards = parse_llm_output(raw_output)
@@ -293,7 +387,11 @@ class CardGenerator:
                 if normalized_strategy in {"image_qa", "image_occlusion"} and request.source_path:
                     self._attach_image(drafts, request.source_path)
 
-                if request.target_count > 0 and len(drafts) > request.target_count:
+                if (
+                    request.target_count > 0
+                    and not auto_target_count
+                    and len(drafts) > request.target_count
+                ):
                     drafts = drafts[: request.target_count]
 
                 logger.info(

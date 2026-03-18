@@ -41,6 +41,7 @@ from qfluentwidgets import (
     Slider,
     StateToolTip,
     SubtitleLabel,
+    SwitchButton,
     isDarkTheme,
 )
 
@@ -834,6 +835,13 @@ class ImportPage(ProgressMixin, QWidget):
         self._total_count_input.setToolTip(
             get_text("import.card_count_tooltip", self._main.config.language)
         )
+        self._auto_target_count_switch = SwitchButton(self._count_card)
+        self._auto_target_count_switch.setChecked(True)
+        self._auto_target_count_switch.setOnText("AI 自适应" if is_zh else "AI Auto")
+        self._auto_target_count_switch.setOffText("手动指定" if is_zh else "Manual")
+        self._auto_target_count_switch.checkedChanged.connect(self._on_auto_target_count_changed)
+        self._count_card.hBoxLayout.addWidget(self._auto_target_count_switch)
+        self._count_card.hBoxLayout.addSpacing(12)
         self._count_card.hBoxLayout.addWidget(self._total_count_input)
         self._count_card.hBoxLayout.addSpacing(16)
         self._count_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -842,9 +850,11 @@ class ImportPage(ProgressMixin, QWidget):
 
         # Mode combo (for test compatibility)
         self._total_count_mode_combo = ComboBox()
+        self._total_count_mode_combo.addItem("auto")
         self._total_count_mode_combo.addItem("custom")
-        self._total_count_mode_combo.setCurrentText("custom")
+        self._total_count_mode_combo.setCurrentText("auto")
         self._total_count_mode_combo.hide()  # Hidden but accessible for tests
+        self._on_auto_target_count_changed(True)
 
         # Deck name card
         self._deck_card = SettingCard(
@@ -1480,6 +1490,32 @@ class ImportPage(ProgressMixin, QWidget):
 
         return (True, count, None)
 
+    def _is_auto_target_count_enabled(self) -> bool:
+        switch = self.__dict__.get("_auto_target_count_switch")
+        if switch is not None and hasattr(switch, "isChecked"):
+            try:
+                return bool(switch.isChecked())
+            except Exception:
+                pass
+
+        mode_combo = self.__dict__.get("_total_count_mode_combo")
+        if mode_combo is not None and hasattr(mode_combo, "currentData"):
+            try:
+                return str(mode_combo.currentData() or "").strip().lower() == "auto"
+            except Exception:
+                return False
+
+        return False
+
+    def _on_auto_target_count_changed(self, checked: bool) -> None:
+        mode_combo = self.__dict__.get("_total_count_mode_combo")
+        if mode_combo is not None and hasattr(mode_combo, "setCurrentText"):
+            mode_combo.setCurrentText("auto" if checked else "custom")
+
+        total_count_input = self.__dict__.get("_total_count_input")
+        if total_count_input is not None and hasattr(total_count_input, "setEnabled"):
+            total_count_input.setEnabled(not checked)
+
     def _validate_tags(self, tags_str: str) -> tuple[bool, str | None]:
         """Validate tags format.
 
@@ -1674,21 +1710,24 @@ class ImportPage(ProgressMixin, QWidget):
         """Start batch conversion."""
         is_zh = self._main.config.language == "zh"
 
-        # Validation: Target card count
-        is_valid, count_value, error_msg = self._validate_card_count(self._total_count_input.text())
-        if not is_valid:
-            InfoBar.warning(
-                title=get_text("import.invalid_card_count", is_zh),
-                content=error_msg,
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
+        if not self._is_auto_target_count_enabled():
+            # Validation: Target card count
+            is_valid, _count_value, error_msg = self._validate_card_count(
+                self._total_count_input.text()
             )
-            if hasattr(self._total_count_input, "setFocus"):
-                self._total_count_input.setFocus()
-            return
+            if not is_valid:
+                InfoBar.warning(
+                    title=get_text("import.invalid_card_count", is_zh),
+                    content=error_msg,
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    position=InfoBarPosition.TOP,
+                    duration=3000,
+                    parent=self,
+                )
+                if hasattr(self._total_count_input, "setFocus"):
+                    self._total_count_input.setFocus()
+                return
 
         # Validation: Tags format
         is_valid, error_msg = self._validate_tags(self._tags_input.text())
@@ -1997,14 +2036,19 @@ class ImportPage(ProgressMixin, QWidget):
             if ratio > 0:
                 strategy_mix.append({"strategy": strategy_id, "ratio": ratio})
 
-        try:
-            target_total = int(self._total_count_input.text())
-        except ValueError:
-            target_total = 20
+        auto_target_count = self._is_auto_target_count_enabled()
+        if auto_target_count:
+            target_total = 0
+        else:
+            try:
+                target_total = int(self._total_count_input.text())
+            except ValueError:
+                target_total = 20
 
         return {
             "mode": "mixed",
             "target_total": target_total,
+            "auto_target_count": auto_target_count,
             "strategy_mix": strategy_mix,
         }
 

@@ -686,6 +686,7 @@ class PreviewPage(ProgressMixin, QWidget):
             config=self._main.config,
         )
         self._generate_worker.progress.connect(self._on_generation_progress)
+        self._generate_worker.warning.connect(self._on_generation_warning)
         self._generate_worker.card_progress.connect(self._on_card_progress)
         self._generate_worker.document_completed.connect(self._on_document_completed)
         self._generate_worker.finished.connect(self._on_generation_finished)
@@ -1194,6 +1195,19 @@ class PreviewPage(ProgressMixin, QWidget):
             isClosable=True,
             position=InfoBarPosition.TOP,
             duration=2500,
+            parent=self,
+        )
+
+    def _on_generation_warning(self, message: str):
+        """Show non-blocking generation warnings without interrupting the workflow."""
+        is_zh = self._main.config.language == "zh"
+        InfoBar.warning(
+            title="生成提示" if is_zh else "Generation Notice",
+            content=message,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=4200,
             parent=self,
         )
 

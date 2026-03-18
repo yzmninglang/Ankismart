@@ -114,12 +114,52 @@ class TestCardGeneratorGenerate:
         assert _STRATEGY_MAP["image_qa"][0] == IMAGE_QA_SYSTEM_PROMPT
         assert _STRATEGY_MAP["image_occlusion"][0] == IMAGE_QA_SYSTEM_PROMPT
 
+    def test_choice_prompts_require_line_by_line_options_and_explanations(self):
+        explanation_rule = "Each explanation line must start with its option letter"
+
+        assert "Each option must be on its own line" in SINGLE_CHOICE_SYSTEM_PROMPT
+        assert explanation_rule in SINGLE_CHOICE_SYSTEM_PROMPT
+        assert "Each option must be on its own line" in MULTIPLE_CHOICE_SYSTEM_PROMPT
+        assert explanation_rule in MULTIPLE_CHOICE_SYSTEM_PROMPT
+
     def test_target_count_trims_generated_cards(self):
         gen = _make_generator(chat_side_effect=_fake_llm_basic)
         request = GenerateRequest(markdown="content", strategy="basic", target_count=1)
         drafts = gen.generate(request)
 
         assert len(drafts) == 1
+
+    def test_auto_target_count_uses_soft_prompt_and_does_not_trim(self):
+        captured: dict[str, str] = {}
+
+        def _fake_llm(system_prompt: str, user_prompt: str, timeout: float | None = None) -> str:
+            captured["system_prompt"] = system_prompt
+            captured["user_prompt"] = user_prompt
+            captured["timeout"] = str(timeout)
+            return json.dumps(
+                [
+                    {"Front": "Q1", "Back": "A1"},
+                    {"Front": "Q2", "Back": "A2"},
+                    {"Front": "Q3", "Back": "A3"},
+                ]
+            )
+
+        gen = _make_generator(chat_side_effect=_fake_llm)
+        request = GenerateRequest(
+            markdown="content " * 400,
+            strategy="basic",
+            target_count=2,
+            auto_target_count=True,
+            enable_auto_split=True,
+            split_threshold=100,
+        )
+
+        drafts = gen.generate(request)
+
+        assert "Generate exactly 2 cards" not in captured["system_prompt"]
+        assert "Generate around 2 cards" in captured["system_prompt"]
+        assert "cover all important knowledge points" in captured["system_prompt"]
+        assert len(drafts) == 3
 
     def test_image_qa_attaches_image(self, tmp_path):
         img_path = tmp_path / "diagram.png"

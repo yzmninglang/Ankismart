@@ -232,6 +232,7 @@ class GenerateWorker(QThread):
         tags: list[str],
         strategy: str,
         target_count: int = 0,
+        auto_target_count: bool = False,
     ) -> None:
         super().__init__()
         self._generator = generator
@@ -240,6 +241,7 @@ class GenerateWorker(QThread):
         self._tags = tags
         self._strategy = strategy
         self._target_count = target_count
+        self._auto_target_count = auto_target_count
         self._cancelled = False
         self._cancel_event = threading.Event()
 
@@ -272,6 +274,7 @@ class GenerateWorker(QThread):
                 trace_id=self._markdown_result.trace_id,
                 source_path=self._markdown_result.source_path,
                 target_count=self._target_count,
+                auto_target_count=self._auto_target_count,
             )
 
             cards = self._generator.generate(request)
@@ -1010,6 +1013,7 @@ class BatchGenerateWorker(QThread):
     """Worker thread for batch card generation with concurrent document processing."""
 
     progress = pyqtSignal(str)
+    warning = pyqtSignal(str)
     card_progress = pyqtSignal(int, int)  # current, total
     document_completed = pyqtSignal(str, int)  # document_name, cards_count
     finished = pyqtSignal(list)  # list[CardDraft]
@@ -1048,6 +1052,7 @@ class BatchGenerateWorker(QThread):
         self._concurrency_cap = int(getattr(config, "llm_concurrency_max", 6))
         self._throttle_events = 0
         self._timeout_events = 0
+        self._warning_emitted = False
 
     def cancel(self) -> None:
         """Cancel the generation operation."""
@@ -1065,19 +1070,22 @@ class BatchGenerateWorker(QThread):
         import concurrent.futures
         import time
 
-        from ankismart.core.config import save_config
 
         try:
             self._start_time = time.time()
 
             # Extract configuration
             target_total = self._generation_config.get("target_total", 20)
+            auto_target_count = bool(self._generation_config.get("auto_target_count", False))
             strategy_mix = self._generation_config.get("strategy_mix", [])
             configured_workers = getattr(self._config, "llm_concurrency", 2) if self._config else 2
             try:
                 configured_workers = int(configured_workers)
             except (TypeError, ValueError):
                 configured_workers = 2
+
+            if auto_target_count and int(target_total or 0) <= 0:
+                target_total = self._estimate_auto_target_total()
 
             # 0 means auto-size by document count, avoiding ThreadPoolExecutor default cap.
             if configured_workers <= 0:
@@ -1091,6 +1099,7 @@ class BatchGenerateWorker(QThread):
                     "event": "worker.batch_generate.started",
                     "documents_count": len(self._documents),
                     "target_total": target_total,
+                    "auto_target_count": auto_target_count,
                     "max_workers": max_workers,
                 },
             )
@@ -1133,6 +1142,7 @@ class BatchGenerateWorker(QThread):
             cards_lock = threading.Lock()
             first_error_message = [None]
             first_error_lock = threading.Lock()
+            runtime_warning_requested = threading.Event()
 
             def generate_for_document(doc_idx: int, document: ConvertedDocument) -> list[CardDraft]:
                 """Generate cards for a single document."""
@@ -1183,6 +1193,7 @@ class BatchGenerateWorker(QThread):
                                 trace_id=document.result.trace_id,
                                 source_path=document.result.source_path,
                                 target_count=remaining,
+                                auto_target_count=auto_target_count,
                                 enable_auto_split=self._enable_auto_split,
                                 split_threshold=self._split_threshold,
                             )
@@ -1206,6 +1217,7 @@ class BatchGenerateWorker(QThread):
                                 f"生成 {strategy} 卡片时出错 ({document.file_name}): "
                                 f"{_format_error_for_ui(e)}"
                             )
+                            runtime_warning_requested.set()
                             break
 
                         if not round_cards:
@@ -1275,6 +1287,8 @@ class BatchGenerateWorker(QThread):
                     try:
                         cards = future.result()
                         all_cards.extend(cards)
+                        if runtime_warning_requested.is_set():
+                            self._emit_non_blocking_warning_if_needed()
                     except Exception as e:
                         self._mark_runtime_error(e)
                         with first_error_lock:
@@ -1293,6 +1307,7 @@ class BatchGenerateWorker(QThread):
                         self.progress.emit(
                             f"处理 {doc.file_name} 时出错: {_format_error_for_ui(e)}"
                         )
+                        self._emit_non_blocking_warning_if_needed()
 
             if self._is_cancelled():
                 self.cancelled.emit()
@@ -1302,6 +1317,9 @@ class BatchGenerateWorker(QThread):
                 self.error.emit(first_error_message[0])
                 return
 
+            if all_cards and first_error_message[0] is not None:
+                self._emit_non_blocking_warning_if_needed(force_generic=True)
+
             self._apply_adaptive_concurrency(
                 configured_workers=configured_workers,
                 had_error=first_error_message[0] is not None,
@@ -1310,16 +1328,12 @@ class BatchGenerateWorker(QThread):
             # Update statistics
             if self._config and all_cards:
                 elapsed_time = time.time() - self._start_time
-                self._config.total_generation_time += elapsed_time
-                self._config.total_cards_generated += len(all_cards)
-                record_operation_metric(
-                    self._config,
-                    event="generate",
-                    duration_seconds=elapsed_time,
+                self._persist_generation_metrics(
+                    elapsed_time=elapsed_time,
+                    cards_generated=len(all_cards),
                     success=first_error_message[0] is None,
                     error_code="strategy_error" if first_error_message[0] else "",
                 )
-                save_config(self._config)
 
             logger.info(
                 "batch generation finished",
@@ -1341,14 +1355,12 @@ class BatchGenerateWorker(QThread):
             )
             if self._config:
                 elapsed_time = max(0.0, time.time() - self._start_time) if self._start_time else 0.0
-                record_operation_metric(
-                    self._config,
-                    event="generate",
-                    duration_seconds=elapsed_time,
+                self._persist_generation_metrics(
+                    elapsed_time=elapsed_time,
+                    cards_generated=0,
                     success=False,
                     error_code="worker_exception",
                 )
-                save_config(self._config)
             self.error.emit(_format_error_for_ui(e))
 
     def _mark_runtime_error(self, exc: Exception) -> None:
@@ -1357,6 +1369,105 @@ class BatchGenerateWorker(QThread):
             self._throttle_events += 1
         if "timeout" in message or "timed out" in message:
             self._timeout_events += 1
+
+    def _estimate_auto_target_total(self) -> int:
+        valid_strategies = [
+            item
+            for item in self._generation_config.get("strategy_mix", [])
+            if isinstance(item, dict) and str(item.get("strategy", "")).strip()
+        ]
+        strategy_count = max(1, len(valid_strategies))
+        total_chars = sum(len(doc.result.content or "") for doc in self._documents)
+
+        chunk_count = 0
+        for document in self._documents:
+            content_length = len(document.result.content or "")
+            if self._enable_auto_split and self._split_threshold > 0:
+                chunk_count += max(
+                    1,
+                    (content_length + self._split_threshold - 1) // self._split_threshold,
+                )
+            else:
+                chunk_count += 1
+
+        length_estimate = max(1, round(total_chars / 2800))
+        chunk_bonus = max(0, chunk_count - len(self._documents)) * 2
+        strategy_bonus = max(0, strategy_count - 1) * 2
+        minimum_cards = max(len(self._documents) * 4, strategy_count * 2)
+        estimated = minimum_cards + length_estimate + chunk_bonus + strategy_bonus
+        return min(240, max(6, estimated))
+
+    def _emit_non_blocking_warning_if_needed(self, *, force_generic: bool = False) -> None:
+        if self._warning_emitted:
+            return
+
+        is_zh = str(getattr(self._config, "language", "zh")).strip().lower().startswith("zh")
+        if self._timeout_events > 0:
+            message = (
+                "生成过程中存在超时，任务会继续，不会主动截断；已完成部分会在结束后保留。"
+                if is_zh
+                else (
+                    "Timeouts occurred during generation. The job will continue without "
+                    "actively truncating completed results."
+                )
+            )
+        elif self._throttle_events > 0:
+            message = (
+                "生成过程中触发限流，任务会继续，已完成部分不会被截断。"
+                if is_zh
+                else (
+                    "Rate limiting occurred during generation. The job will continue and "
+                    "completed results will be kept."
+                )
+            )
+        elif force_generic:
+            message = (
+                "生成过程中存在部分失败，系统已继续处理其余内容并保留已完成结果。"
+                if is_zh
+                else (
+                    "Partial failures occurred during generation. Remaining work continued "
+                    "and completed results were kept."
+                )
+            )
+        else:
+            return
+
+        self._warning_emitted = True
+        self.warning.emit(message)
+
+    def _persist_generation_metrics(
+        self,
+        *,
+        elapsed_time: float,
+        cards_generated: int,
+        success: bool,
+        error_code: str = "",
+    ) -> None:
+        if self._config is None:
+            return
+
+        total_generation_time = float(getattr(self._config, "total_generation_time", 0.0) or 0.0)
+        total_cards_generated = int(getattr(self._config, "total_cards_generated", 0) or 0)
+        setattr(self._config, "total_generation_time", total_generation_time + elapsed_time)
+        setattr(self._config, "total_cards_generated", total_cards_generated + cards_generated)
+
+        try:
+            record_operation_metric(
+                self._config,
+                event="generate",
+                duration_seconds=elapsed_time,
+                success=success,
+                error_code=error_code,
+            )
+        except AttributeError:
+            pass
+
+        try:
+            from ankismart.core.config import save_config
+
+            save_config(self._config)
+        except Exception:
+            pass
 
     def _apply_adaptive_concurrency(self, *, configured_workers: int, had_error: bool) -> None:
         if not self._config or not self._adaptive_enabled:

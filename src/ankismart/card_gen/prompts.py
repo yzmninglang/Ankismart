@@ -185,9 +185,11 @@ SINGLE_CHOICE_SYSTEM_PROMPT = (
     "Rules:\n"
     '- Output ONLY a JSON array of objects with "Front" and "Back" fields\n'
     "- Front must contain: question + 4 options labeled A/B/C/D\n"
+    "- Each option must be on its own line; never place multiple options on one line\n"
     "- Back must follow a strict structure:\n"
     '  1) First line: "答案: <single option letter>"\n'
     '  2) Then "解析:" with layered lines; each key point on a new line\n'
+    "- Each explanation line must start with its option letter (for example: A. ...)\n"
     '- Do NOT add any leading numbering before "答案:"/"解析:" (e.g., "1. 答案:", "2. 解析:")\n'
     "- For long explanations, split into 2+ short paragraphs on new lines "
     "(do NOT add numbering prefixes like 1./2.)\n"
@@ -207,7 +209,10 @@ SINGLE_CHOICE_SYSTEM_PROMPT = (
     "C. <anki-mathjax>x^2</anki-mathjax>\\n"
     'D. <anki-mathjax>3x</anki-mathjax>",\n'
     '   "Back": "答案: B\\n'
-    "解析:\\nUsing the power rule <anki-mathjax>\\\\frac{d}{dx}(x^n) = nx^{n-1}</anki-mathjax>.\\nSo <anki-mathjax>f'(x) = 3x^2</anki-mathjax>.\"}\n"
+    "解析:\\nA. <anki-mathjax>2x^2</anki-mathjax> 少乘了系数 3。\\n"
+    "B. 使用幂函数求导法则 <anki-mathjax>\\\\frac{d}{dx}(x^n) = nx^{n-1}</anki-mathjax>，所以结果是 <anki-mathjax>3x^2</anki-mathjax>。\\n"
+    "C. <anki-mathjax>x^2</anki-mathjax> 漏掉了系数 3。\\n"
+    "D. <anki-mathjax>3x</anki-mathjax> 的次数不对。\"}\n"
     "]\n"
 )
 
@@ -218,9 +223,11 @@ MULTIPLE_CHOICE_SYSTEM_PROMPT = (
     "Rules:\n"
     '- Output ONLY a JSON array of objects with "Front" and "Back" fields\n'
     "- Front must contain: question + 4 to 5 options labeled A/B/C/D(/E)\n"
+    "- Each option must be on its own line; never place multiple options on one line\n"
     "- Back must follow a strict structure:\n"
     '  1) First line: "答案: <all correct option letters>"\n'
     '  2) Then "解析:" with layered lines; each key point on a new line\n'
+    "- Each explanation line must start with its option letter (for example: A. ...)\n"
     '- Do NOT add any leading numbering before "答案:"/"解析:" (e.g., "1. 答案:", "2. 解析:")\n'
     "- For long explanations, split into 2+ short paragraphs on new lines "
     "(do NOT add numbering prefixes like 1./2.)\n"
@@ -240,7 +247,10 @@ MULTIPLE_CHOICE_SYSTEM_PROMPT = (
     "C. <anki-mathjax>x = 3</anki-mathjax>\\n"
     'D. <anki-mathjax>x = 6</anki-mathjax>",\n'
     '   "Back": "答案: B, C\\n'
-    '解析:\\nFactoring gives <anki-mathjax>(x-2)(x-3) = 0</anki-mathjax>.\\nSo <anki-mathjax>x = 2</anki-mathjax> or <anki-mathjax>x = 3</anki-mathjax>."}\n'
+    '解析:\\nA. 代入后不满足方程。\\n'
+    'B. 因式分解得到 <anki-mathjax>(x-2)(x-3) = 0</anki-mathjax>，所以 <anki-mathjax>x = 2</anki-mathjax> 正确。\\n'
+    'C. 因式分解得到 <anki-mathjax>(x-2)(x-3) = 0</anki-mathjax>，所以 <anki-mathjax>x = 3</anki-mathjax> 正确。\\n'
+    'D. 代入后不满足方程。"}\n'
     "]\n"
 )
 

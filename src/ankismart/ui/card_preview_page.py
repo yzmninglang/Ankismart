@@ -122,20 +122,79 @@ PREVIEW_READABILITY_CSS = """
     line-height: 1.85;
 }
 
+.card[data-card-type] .flat-focus-line {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(255, 244, 214, 0.92), rgba(255, 232, 176, 0.9));
+    color: #8a4b00;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.65;
+}
+
+.night_mode .card[data-card-type] .flat-focus-line,
+.nightMode .card[data-card-type] .flat-focus-line {
+    background: linear-gradient(135deg, rgba(131, 92, 22, 0.88), rgba(96, 67, 18, 0.84));
+    color: #ffd980;
+}
+
+.card[data-card-type] .flat-keyword {
+    color: #a24b00;
+    font-weight: 800;
+}
+
+.night_mode .card[data-card-type] .flat-keyword,
+.nightMode .card[data-card-type] .flat-keyword {
+    color: #ffb86b;
+}
+
 .card[data-card-type] .flat-option-list {
     margin-top: 12px;
+    display: grid;
+    gap: 8px;
 }
 
 .card[data-card-type] .flat-option-line {
-    display: block;
-    margin-top: 6px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    column-gap: 10px;
     font-size: 20px;
     line-height: 1.85;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(36, 96, 168, 0.05);
 }
 
 .card[data-card-type] .flat-option-key {
     font-weight: 700;
-    margin-right: 6px;
+    color: #245fa8;
+}
+
+.card[data-card-type] .flat-answer-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.card[data-card-type] .flat-answer-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    column-gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(46, 125, 50, 0.08);
+}
+
+.card[data-card-type] .flat-answer-key {
+    font-weight: 800;
+    color: #2e7d32;
+}
+
+.card[data-card-type] .flat-answer-text {
+    font-size: 20px;
+    line-height: 1.85;
 }
 
 .card[data-card-type] .flat-answer-line {
@@ -247,7 +306,59 @@ class CardRenderer:
         value = text.strip()
         if not value:
             return f'<span class="empty-placeholder">{empty_text}</span>'
-        return value.replace("\r\n", "\n").replace("\n", "<br>")
+        return CardRenderer._highlight_keywords(value).replace("\r\n", "\n").replace("\n", "<br>")
+
+    @staticmethod
+    def _highlight_keywords(text: str) -> str:
+        highlighted_lines: list[str] = []
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if not line:
+                highlighted_lines.append("")
+                continue
+            line = re.sub(
+                r"^(?P<label>[A-Ea-e]|C\d+)(?P<sep>[\.、\):：\-])\s*",
+                lambda match: (
+                    f'<span class="flat-keyword">{match.group("label").upper()}</span>'
+                    f'{match.group("sep")} '
+                ),
+                line,
+            )
+            line = re.sub(
+                r"^(?P<label>[^:：<>\n]{1,10})(?P<sep>[:：])\s*",
+                lambda match: (
+                    f'<span class="flat-keyword">{match.group("label").strip()}</span>'
+                    f'{match.group("sep")} '
+                ),
+                line,
+            )
+            highlighted_lines.append(line)
+        return "\n".join(highlighted_lines)
+
+    @staticmethod
+    def _render_focus_line(text: str, *, empty_text: str = "（空）") -> str:
+        value = text.strip()
+        if not value:
+            return f'<span class="empty-placeholder">{empty_text}</span>'
+        content = CardRenderer._format_text_block(value, empty_text=empty_text)
+        return f'<div class="flat-focus-line">{content}</div>'
+
+    @staticmethod
+    def _render_answer_items(items: list[tuple[str, str]], *, empty_text: str = "（空）") -> str:
+        if not items:
+            return CardRenderer._format_text_block("", empty_text=empty_text)
+        rows = "".join(
+            (
+                '<div class="flat-answer-item">'
+                f'<span class="flat-answer-key">{CardRenderer._highlight_keywords(key)}</span>'
+                f'<span class="flat-answer-text">'
+                f"{CardRenderer._format_text_block(text, empty_text=empty_text)}"
+                "</span>"
+                "</div>"
+            )
+            for key, text in items
+        )
+        return f'<div class="flat-answer-stack">{rows}</div>'
 
     @staticmethod
     def _extract_plain_lines(text: str) -> list[str]:
@@ -499,7 +610,7 @@ class CardRenderer:
         *,
         question: str,
         options: list[tuple[str, str]],
-        answer_text: str,
+        answer_keys: list[str],
         explanation: str,
     ) -> str:
         question_html = CardRenderer._format_text_block(question, empty_text="（空问题）")
@@ -515,7 +626,12 @@ class CardRenderer:
         options_html = f'<div class="flat-option-list">{option_rows}</div>' if option_rows else ""
         question_block_html = f"{question_html}{options_html}"
 
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（未标注）")
+        option_map = {key.upper(): text for key, text in options}
+        answer_items = [
+            (key, option_map.get(key.upper(), "（未标注选项内容）"))
+            for key in answer_keys
+        ]
+        answer_html = CardRenderer._render_answer_items(answer_items, empty_text="（未标注）")
         return CardRenderer._render_three_blocks(
             question_html=question_block_html,
             answer_html=answer_html,
@@ -560,17 +676,19 @@ class CardRenderer:
         question_html = CardRenderer._format_text_block(question_plain, empty_text="（无填空内容）")
 
         if cloze_entries:
-            answer_lines = []
+            answer_items = []
             for idx, answer, hint in cloze_entries:
-                line = f"C{idx}: {answer or '（空）'}"
+                text = answer or "（空）"
                 if hint:
-                    line = f"{line}（提示：{hint}）"
-                answer_lines.append(line)
-            answer_text = "\n".join(answer_lines)
+                    text = f"{text}\n提示：{hint}"
+                answer_items.append((f"C{idx}", text))
         else:
-            answer_text = "（未检测到有效填空标记）"
+            answer_items = []
 
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（空）")
+        answer_html = CardRenderer._render_answer_items(
+            answer_items,
+            empty_text="（未检测到有效填空标记）",
+        )
         explanation = CardRenderer._normalize_html_to_text(card.fields.get("Extra", ""))
         content = CardRenderer._render_three_blocks(
             question_html=question_html,
@@ -582,12 +700,18 @@ class CardRenderer:
     @staticmethod
     def _render_concept(card: CardDraft) -> str:
         """Render concept cards as question/answer/explanation."""
-        question_html = CardRenderer._format_text_block(card.fields.get("Front", ""))
+        question_html = CardRenderer._render_focus_line(
+            card.fields.get("Front", ""),
+            empty_text="（空问题）",
+        )
         back_raw = card.fields.get("Back", "")
         answer_text, explanation = CardRenderer._parse_answer_and_explanation(back_raw)
         if not answer_text:
             answer_text = CardRenderer._normalize_html_to_text(back_raw)
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（空）")
+        answer_html = CardRenderer._render_answer_items(
+            [("概念要点", answer_text)],
+            empty_text="（空）",
+        )
         content = CardRenderer._render_three_blocks(
             question_html=question_html,
             answer_html=answer_html,
@@ -598,12 +722,18 @@ class CardRenderer:
     @staticmethod
     def _render_key_terms(card: CardDraft) -> str:
         """Render key term cards as question/answer/explanation."""
-        question_html = CardRenderer._format_text_block(card.fields.get("Front", ""))
+        question_html = CardRenderer._render_focus_line(
+            card.fields.get("Front", ""),
+            empty_text="（空问题）",
+        )
         back_raw = card.fields.get("Back", "")
         answer_text, explanation = CardRenderer._parse_answer_and_explanation(back_raw)
         if not answer_text:
             answer_text = CardRenderer._normalize_html_to_text(back_raw)
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（空）")
+        answer_html = CardRenderer._render_answer_items(
+            [("术语要点", answer_text)],
+            empty_text="（空）",
+        )
         content = CardRenderer._render_three_blocks(
             question_html=question_html,
             answer_html=answer_html,
@@ -619,11 +749,10 @@ class CardRenderer:
         if keys:
             keys = keys[:1]
 
-        answer_text = ", ".join(keys) if keys else "（未标注）"
         content = CardRenderer._render_choice_card(
             question=question,
             options=options,
-            answer_text=answer_text,
+            answer_keys=keys,
             explanation=explanation,
         )
         return CardRenderer._wrap_html(content, "choice")
@@ -634,11 +763,10 @@ class CardRenderer:
         question, options = CardRenderer._parse_choice_front(card.fields.get("Front", ""))
         keys, explanation = CardRenderer._parse_choice_back(card.fields.get("Back", ""))
 
-        answer_text = ", ".join(keys) if keys else "（未标注）"
         content = CardRenderer._render_choice_card(
             question=question,
             options=options,
-            answer_text=answer_text,
+            answer_keys=keys,
             explanation=explanation,
         )
         return CardRenderer._wrap_html(content, "choice")
