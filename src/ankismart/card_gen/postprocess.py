@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from ankismart.core.errors import CardGenError, ErrorCode
 from ankismart.core.logging import get_logger
@@ -88,6 +89,25 @@ def _normalize_card_fields(card: dict, note_type: str) -> dict[str, object]:
     return normalized
 
 
+def _build_quality_flags(fields: dict[str, object], note_type: str) -> list[str]:
+    normalized_note_type = (note_type or "").strip()
+    question = str(fields.get("Front", "") or fields.get("Question", "")).strip()
+    answer = str(fields.get("Back", "") or fields.get("Answer", "")).strip()
+    text = str(fields.get("Text", "")).strip()
+
+    flags: list[str] = []
+    if normalized_note_type in {"Basic", "AnkiSmart Basic"} or normalized_note_type.startswith(
+        "Basic"
+    ):
+        if len(question) < 3 or len(answer) < 3:
+            flags.append("too_short")
+        if question and answer and question == answer:
+            flags.append("question_equals_answer")
+    elif normalized_note_type.startswith("Cloze") and len(text) < 8:
+        flags.append("too_short")
+    return flags
+
+
 def build_card_drafts(
     raw_cards: list[dict],
     deck_name: str,
@@ -95,6 +115,9 @@ def build_card_drafts(
     tags: list[str],
     trace_id: str,
     source_format: str = "",
+    source_path: str = "",
+    source_document: str = "",
+    strategy_id: str = "",
 ) -> list[CardDraft]:
     """Convert raw LLM output dicts into validated CardDraft objects."""
     drafts: list[CardDraft] = []
@@ -112,6 +135,10 @@ def build_card_drafts(
             continue
 
         normalized_fields = _normalize_card_fields(card, note_type)
+        quality_flags = _build_quality_flags(normalized_fields, note_type)
+        resolved_source_document = source_document or (
+            Path(source_path).name if source_path else ""
+        )
 
         draft = CardDraft(
             trace_id=trace_id,
@@ -119,7 +146,13 @@ def build_card_drafts(
             note_type=note_type,
             fields=normalized_fields,
             tags=tags,
-            metadata=CardMetadata(source_format=source_format),
+            metadata=CardMetadata(
+                source_format=source_format,
+                source_path=source_path,
+                source_document=resolved_source_document,
+                strategy_id=strategy_id,
+                quality_flags=quality_flags,
+            ),
         )
         drafts.append(draft)
 

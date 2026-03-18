@@ -216,6 +216,17 @@ class TestBuildCardDrafts:
         )
         assert drafts[0].metadata.source_format == "pdf"
 
+    def test_short_basic_cards_attach_quality_flags(self):
+        drafts = build_card_drafts(
+            raw_cards=[{"Front": "Q", "Back": "A"}],
+            deck_name="Deck",
+            note_type="Basic",
+            tags=["t"],
+            trace_id="t-7",
+        )
+
+        assert drafts[0].metadata.quality_flags == ["too_short"]
+
     def test_all_cloze_invalid_returns_empty(self):
         raw = [
             {"Text": "No cloze 1"},

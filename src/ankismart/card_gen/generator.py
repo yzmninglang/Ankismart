@@ -396,6 +396,11 @@ class CardGenerator:
                             note_type=note_type,
                             tags=request.tags or ["ankismart"],
                             trace_id=trace_id,
+                            source_path=request.source_path,
+                            source_document=(
+                                Path(request.source_path).name if request.source_path else ""
+                            ),
+                            strategy_id=normalized_strategy,
                         )
 
                         if (
@@ -436,6 +441,11 @@ class CardGenerator:
                         note_type=note_type,
                         tags=request.tags or ["ankismart"],
                         trace_id=trace_id,
+                        source_path=request.source_path,
+                        source_document=(
+                            Path(request.source_path).name if request.source_path else ""
+                        ),
+                        strategy_id=normalized_strategy,
                     )
 
                 # Attach source image for image-based strategy

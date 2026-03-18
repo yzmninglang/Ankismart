@@ -10,6 +10,7 @@ from ankismart.core.models import (
     BatchConvertResult,
     ConvertedDocument,
     MarkdownResult,
+    RegenerateRequest,
 )
 from ankismart.ui.preview_page import MarkdownHighlighter, PreviewPage
 
@@ -578,6 +579,23 @@ def test_generation_warning_publishes_task_warning(monkeypatch):
 
     assert events[-1].kind == "warning"
     assert events[-1].stage == "generate"
+
+
+def test_build_documents_filters_pending_regenerate_source_documents():
+    main = _make_main_window()
+    page = PreviewPage(main)
+    page._documents = [
+        _make_doc("a.md", "# A"),
+        _make_doc("b.md", "# B"),
+    ]
+    page._pending_regenerate_request = RegenerateRequest(
+        scope="source_document",
+        source_documents=["b.md"],
+    )
+
+    docs = page._build_documents()
+
+    assert [doc.file_name for doc in docs] == ["b.md"]
 
 def test_sample_error_marks_state_tooltip_failed(monkeypatch):
     main = _make_main_window()

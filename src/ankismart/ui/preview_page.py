@@ -25,7 +25,8 @@ from ankismart.anki_gateway.gateway import AnkiGateway
 from ankismart.core.config import append_task_history, record_operation_metric, save_config
 from ankismart.core.errors import ErrorCode
 from ankismart.core.logging import get_logger
-from ankismart.core.models import BatchConvertResult, ConvertedDocument
+from ankismart.core.models import BatchConvertResult, ConvertedDocument, RegenerateRequest
+from ankismart.core.task_models import build_default_task_run
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.shortcuts import ShortcutKeys, create_shortcut, get_shortcut_text
 from ankismart.ui.styles import (
@@ -155,6 +156,7 @@ class PreviewPage(ProgressMixin, QWidget):
         self._total_expected_docs = 0  # Total expected documents
         self._generation_start_ts = 0.0
         self._current_task_id = ""
+        self._pending_regenerate_request: RegenerateRequest | None = None
 
         self._setup_ui()
         self._init_shortcuts()
@@ -451,7 +453,11 @@ class PreviewPage(ProgressMixin, QWidget):
         self._save_current_edit()
 
         result = []
+        regenerate_request = self.__dict__.get("_pending_regenerate_request")
+        allowed_documents = set(getattr(regenerate_request, "source_documents", []) or [])
         for i, doc in enumerate(self._documents):
+            if allowed_documents and doc.file_name not in allowed_documents:
+                continue
             if i in self._edited_content:
                 # Create new document with edited content
                 new_doc = ConvertedDocument(
@@ -624,6 +630,7 @@ class PreviewPage(ProgressMixin, QWidget):
 
         # Build documents with edits
         documents = self._build_documents()
+        self._pending_regenerate_request = None
         if not documents:
             InfoBar.warning(
                 title="警告" if self._main.config.language == "zh" else "Warning",
@@ -1689,6 +1696,14 @@ class PreviewPage(ProgressMixin, QWidget):
         publish = getattr(self._main, "publish_task_event", None)
         if callable(publish):
             publish(event)
+
+    def start_regenerate_request(self, request: RegenerateRequest) -> None:
+        self._pending_regenerate_request = request
+        register_task = getattr(self._main, "register_task", None)
+        if callable(register_task):
+            task = register_task(build_default_task_run(flow="full_pipeline"), activate=True)
+            self._current_task_id = task.task_id
+        self._on_generate_cards()
 
     def retranslate_ui(self):
         """Retranslate UI elements when language changes."""

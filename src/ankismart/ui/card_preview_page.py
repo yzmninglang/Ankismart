@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QListWidget,
@@ -40,7 +41,7 @@ from qfluentwidgets import (
 
 from ankismart.core.config import append_task_history, record_operation_metric, save_config
 from ankismart.core.logging import get_logger
-from ankismart.core.models import CardDraft
+from ankismart.core.models import CardDraft, RegenerateRequest
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.styles import (
     MARGIN_SMALL,
@@ -1001,6 +1002,7 @@ class CardPreviewPage(QWidget):
 
         # Card list
         self._card_list = QListWidget()
+        self._card_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._card_list.currentRowChanged.connect(self._on_card_selected)
         layout.addWidget(self._card_list, 1)
 
@@ -1067,6 +1069,24 @@ class CardPreviewPage(QWidget):
         self._btn_next.setEnabled(False)
         layout.addWidget(self._btn_next)
 
+        self._btn_regenerate_current = PushButton(
+            "重生成当前卡" if self._main.config.language == "zh" else "Regenerate Current"
+        )
+        self._btn_regenerate_current.clicked.connect(self._regenerate_current_card)
+        layout.addWidget(self._btn_regenerate_current)
+
+        self._btn_regenerate_selected = PushButton(
+            "重生成所选" if self._main.config.language == "zh" else "Regenerate Selected"
+        )
+        self._btn_regenerate_selected.clicked.connect(self._regenerate_selected_cards)
+        layout.addWidget(self._btn_regenerate_selected)
+
+        self._btn_regenerate_source = PushButton(
+            "重生成来源文档" if self._main.config.language == "zh" else "Regenerate Source"
+        )
+        self._btn_regenerate_source.clicked.connect(self._regenerate_source_document)
+        layout.addWidget(self._btn_regenerate_source)
+
         self._btn_export_apkg = PushButton(
             "导出为 APKG" if self._main.config.language == "zh" else "Export as APKG"
         )
@@ -1121,10 +1141,18 @@ class CardPreviewPage(QWidget):
         deck_name = card.deck_name or "-"
         tags_text = self._format_tags_summary(card.tags)
         quality_score = self._compute_card_quality_score(card)
+        quality_flags = list(getattr(card.metadata, "quality_flags", []) or [])
+        quality_suffix = ""
+        if quality_flags:
+            quality_suffix = (
+                f"  风险: {', '.join(quality_flags)}"
+                if is_zh
+                else f"  Flags: {', '.join(quality_flags)}"
+            )
         self._note_type_label.setText(
-            f"类型: {kind_text}  质量: {quality_score}"
+            f"类型: {kind_text}  质量: {quality_score}{quality_suffix}"
             if is_zh
-            else f"Type: {kind_text}  Quality: {quality_score}"
+            else f"Type: {kind_text}  Quality: {quality_score}{quality_suffix}"
         )
         self._deck_label.setText(f"牌组: {deck_name}" if is_zh else f"Deck: {deck_name}")
         self._tags_label.setText(f"标签: {tags_text}" if is_zh else f"Tags: {tags_text}")
@@ -1164,7 +1192,12 @@ class CardPreviewPage(QWidget):
             ]
 
         if self._quality_low_only:
-            filtered = [c for c in filtered if self._compute_card_quality_score(c) < 60]
+            filtered = [
+                c
+                for c in filtered
+                if (getattr(c.metadata, "quality_flags", None) or [])
+                or self._compute_card_quality_score(c) < 60
+            ]
 
         if self._duplicate_risk_only:
             filtered = [c for c in filtered if self._is_duplicate_risk_card(c)]
@@ -1233,6 +1266,8 @@ class CardPreviewPage(QWidget):
             and question == answer
         ):
             score -= 35
+        if getattr(card.metadata, "quality_flags", None):
+            score = min(score, 55)
         return max(0, min(100, score))
 
     def _update_quality_overview(self) -> None:
@@ -1284,7 +1319,10 @@ class CardPreviewPage(QWidget):
     def _build_card_list_item_text(self, card: CardDraft) -> str:
         question = self._get_card_question_text(card)
         badges: list[str] = []
-        if self._compute_card_quality_score(card) < 60:
+        if (
+            getattr(card.metadata, "quality_flags", None)
+            or self._compute_card_quality_score(card) < 60
+        ):
             badges.append("[低分]" if self._main.config.language == "zh" else "[Low]")
         if self._is_duplicate_risk_card(card):
             badges.append(
@@ -1841,6 +1879,75 @@ class CardPreviewPage(QWidget):
         self._btn_push.setEnabled(enabled)
         self._btn_export_apkg.setEnabled(enabled)
         self._btn_export_csv.setEnabled(enabled)
+        self._btn_regenerate_current.setEnabled(enabled)
+        self._btn_regenerate_selected.setEnabled(enabled)
+        self._btn_regenerate_source.setEnabled(enabled)
+
+    def _selected_filtered_indices(self) -> list[int]:
+        selected_rows = sorted(index.row() for index in self._card_list.selectedIndexes())
+        if selected_rows:
+            return selected_rows
+        if 0 <= self._current_index < len(self._filtered_cards):
+            return [self._current_index]
+        return []
+
+    def _build_regenerate_request(self, scope: str, indices: list[int]) -> RegenerateRequest | None:
+        cards = [
+            self._filtered_cards[index]
+            for index in indices
+            if 0 <= index < len(self._filtered_cards)
+        ]
+        if not cards:
+            return None
+
+        source_documents: list[str] = []
+        strategy_ids: list[str] = []
+        for card in cards:
+            source_document = str(getattr(card.metadata, "source_document", "") or "").strip()
+            strategy_id = str(getattr(card.metadata, "strategy_id", "") or "").strip()
+            if source_document and source_document not in source_documents:
+                source_documents.append(source_document)
+            if strategy_id and strategy_id not in strategy_ids:
+                strategy_ids.append(strategy_id)
+
+        return RegenerateRequest(
+            scope=scope,
+            card_indices=indices,
+            source_documents=source_documents,
+            strategy_ids=strategy_ids,
+        )
+
+    def _dispatch_regenerate_request(self, request: RegenerateRequest) -> None:
+        switch = getattr(self._main, "switch_to_preview", None)
+        if callable(switch):
+            switch()
+        preview_page = getattr(self._main, "preview_page", None)
+        starter = getattr(preview_page, "start_regenerate_request", None)
+        if callable(starter):
+            starter(request)
+
+    def _regenerate_current_card(self) -> None:
+        if not (0 <= self._current_index < len(self._filtered_cards)):
+            return
+        request = self._build_regenerate_request("current_card", [self._current_index])
+        if request is not None:
+            self._dispatch_regenerate_request(request)
+
+    def _regenerate_selected_cards(self) -> None:
+        request = self._build_regenerate_request(
+            "selected_cards",
+            self._selected_filtered_indices(),
+        )
+        if request is not None:
+            self._dispatch_regenerate_request(request)
+
+    def _regenerate_source_document(self) -> None:
+        request = self._build_regenerate_request(
+            "source_document",
+            self._selected_filtered_indices(),
+        )
+        if request is not None:
+            self._dispatch_regenerate_request(request)
 
     def _build_export_rows(self) -> tuple[list[str], list[dict[str, str]]]:
         rows: list[dict[str, str]] = []
@@ -1857,6 +1964,9 @@ class CardPreviewPage(QWidget):
             "trace_id",
             "source_format",
             "source_path",
+            "source_document",
+            "strategy_id",
+            "quality_flags",
             *[f"field_{name}" for name in ordered_field_keys],
         ]
 
@@ -1869,6 +1979,9 @@ class CardPreviewPage(QWidget):
                 "trace_id": card.trace_id or "",
                 "source_format": card.metadata.source_format or "",
                 "source_path": card.metadata.source_path or "",
+                "source_document": card.metadata.source_document or "",
+                "strategy_id": card.metadata.strategy_id or "",
+                "quality_flags": ",".join(card.metadata.quality_flags or []),
             }
             for key in ordered_field_keys:
                 row[f"field_{key}"] = str(card.fields.get(key, "") or "")

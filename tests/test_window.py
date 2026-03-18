@@ -55,8 +55,9 @@ def test_main_window_startup_smoke_budget(monkeypatch) -> None:
     window.close()
 
 
-def test_main_window_loads_resumable_tasks(monkeypatch) -> None:
+def test_main_window_loads_resumable_tasks(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+    monkeypatch.setattr("ankismart.ui.main_window.TASKS_PATH", tmp_path / "tasks.json")
     task = build_default_task_run(flow="full_pipeline", task_id="task-r1")
     task.status = TaskStatus.FAILED
     task.resume_from_stage = "generate"
