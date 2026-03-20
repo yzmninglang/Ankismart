@@ -66,6 +66,7 @@ from ankismart.ui.styles import (
     SPACING_LARGE,
     SPACING_MEDIUM,
     SPACING_SMALL,
+    apply_compact_combo_metrics,
 )
 from ankismart.ui.task_runtime import TaskEvent
 from ankismart.ui.utils import (
@@ -94,6 +95,7 @@ _OCR_FILE_SUFFIXES = {
     ".webp",
 }
 _MERGED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+_PREVIEW_PROGRESS_SILENT_SUFFIXES = {".md", ".docx"}
 
 _RIGHT_OPTION_CARD_MAX_HEIGHT = 72
 _RIGHT_CONFIG_GROUP_MAX_HEIGHT = 360
@@ -848,13 +850,13 @@ class ImportPage(ProgressMixin, QWidget):
             group,
         )
         self._generation_preset_combo = ComboBox(self._generation_preset_card)
-        self._populate_generation_preset_combo()
-        self._btn_apply_generation_preset = PushButton("应用" if is_zh else "Apply")
-        self._btn_apply_generation_preset.clicked.connect(
-            lambda: self._apply_generation_preset(persist=True, show_feedback=True)
+        apply_compact_combo_metrics(
+            self._generation_preset_combo,
+            control_height=22,
+            popup_item_height=24,
         )
+        self._populate_generation_preset_combo()
         self._generation_preset_card.hBoxLayout.addWidget(self._generation_preset_combo)
-        self._generation_preset_card.hBoxLayout.addWidget(self._btn_apply_generation_preset)
         self._generation_preset_card.hBoxLayout.addSpacing(16)
         self._generation_preset_card.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -900,6 +902,7 @@ class ImportPage(ProgressMixin, QWidget):
         self._total_count_mode_combo.hide()  # Hidden but accessible for tests
         self._on_auto_target_count_changed(True)
         self._restore_generation_preset_from_config()
+        self._generation_preset_combo.currentIndexChanged.connect(self._on_generation_preset_changed)
 
         # Deck name card
         self._deck_card = SettingCard(
@@ -993,6 +996,9 @@ class ImportPage(ProgressMixin, QWidget):
             persist=False,
         )
 
+    def _on_generation_preset_changed(self, *_args) -> None:
+        self._apply_generation_preset(persist=True, show_feedback=False)
+
     def _apply_generation_preset(
         self,
         preset_id: str | None = None,
@@ -1069,6 +1075,11 @@ class ImportPage(ProgressMixin, QWidget):
             group,
         )
         self._strategy_template_combo = ComboBox(template_card)
+        apply_compact_combo_metrics(
+            self._strategy_template_combo,
+            control_height=22,
+            popup_item_height=24,
+        )
         for key, meta in _STRATEGY_TEMPLATE_LIBRARY.items():
             self._strategy_template_combo.addItem(
                 str(meta["zh"] if is_zh else meta["en"]),
@@ -1077,10 +1088,7 @@ class ImportPage(ProgressMixin, QWidget):
         self._strategy_template_combo.currentIndexChanged.connect(
             self._on_strategy_template_changed
         )
-        self._btn_apply_strategy_template = PushButton("应用" if is_zh else "Apply")
-        self._btn_apply_strategy_template.clicked.connect(self._apply_selected_strategy_template)
         template_card.hBoxLayout.addWidget(self._strategy_template_combo)
-        template_card.hBoxLayout.addWidget(self._btn_apply_strategy_template)
         template_card.hBoxLayout.addSpacing(16)
         template_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         template_card.setMaximumHeight(_RIGHT_OPTION_CARD_MAX_HEIGHT)
@@ -1157,7 +1165,7 @@ class ImportPage(ProgressMixin, QWidget):
     def _on_strategy_template_changed(self, *_args) -> None:
         self._apply_selected_strategy_template(show_feedback=False)
 
-    def _apply_selected_strategy_template(self, *, show_feedback: bool = True) -> None:
+    def _apply_selected_strategy_template(self, *, show_feedback: bool = False) -> None:
         self._initialize_strategy_group_if_needed()
         template_id = str(self._strategy_template_combo.currentData() or "")
         template = _STRATEGY_TEMPLATE_LIBRARY.get(template_id)
@@ -2279,10 +2287,8 @@ class ImportPage(ProgressMixin, QWidget):
             if preview_page and preview_page.isVisible():
                 preview_page.add_converted_document(document)
 
-                # Count remaining pending files
-                pending_count = sum(
-                    1 for status in self._file_status.values() if status != "completed"
-                )
+                # md/docx conversions should not surface as preview-page progress prompts.
+                pending_count = self._count_preview_pending_files()
                 preview_page.update_converting_status(pending_count)
             else:
                 self._main.batch_result.documents.append(document)
@@ -2293,7 +2299,7 @@ class ImportPage(ProgressMixin, QWidget):
             self._main.batch_result = BatchConvertResult(documents=[document], errors=[])
 
             # Switch to preview page with pending files indicator
-            pending_count = sum(1 for status in self._file_status.values() if status != "completed")
+            pending_count = self._count_preview_pending_files()
             total_files = len(self._file_status)
             self._main.switch_to_preview(
                 pending_files_count=pending_count, total_expected=total_files
@@ -2434,6 +2440,16 @@ class ImportPage(ProgressMixin, QWidget):
             if path.exists():
                 failed_paths.append(str(path))
         return failed_paths
+
+    def _count_preview_pending_files(self) -> int:
+        pending = 0
+        for file_key, status in self.__dict__.get("_file_status", {}).items():
+            if status == "completed":
+                continue
+            if Path(file_key).suffix.lower() in _PREVIEW_PROGRESS_SILENT_SUFFIXES:
+                continue
+            pending += 1
+        return pending
 
     def _update_resume_queue_from_status(self) -> None:
         failed_paths = self._collect_failed_file_paths_from_status()
@@ -2708,6 +2724,7 @@ class ImportPage(ProgressMixin, QWidget):
         self._cleanup_ocr_download_worker()
         self._cleanup_deck_loader_worker()
         self._dispose_state_tooltip()
+        self._dispose_progress_info_bar()
         super().closeEvent(event)
 
     def _clear_all(self):
@@ -3033,12 +3050,6 @@ class ImportPage(ProgressMixin, QWidget):
         self._btn_clear.setText("清除" if is_zh else "Clear")
         if hasattr(self, "_resume_failed_btn"):
             self._refresh_resume_failed_button()
-
-        if hasattr(self, "_btn_apply_strategy_template"):
-            self._btn_apply_strategy_template.setText("应用" if is_zh else "Apply")
-
-        if hasattr(self, "_btn_apply_generation_preset"):
-            self._btn_apply_generation_preset.setText("应用" if is_zh else "Apply")
 
         if hasattr(self, "_generation_preset_combo"):
             self._populate_generation_preset_combo()

@@ -517,8 +517,11 @@ class PreviewPage(ProgressMixin, QWidget):
             self._hide_converting_info_bar()
             self._btn_generate.setEnabled(True)
         else:
-            pending = self._total_expected_docs - len(self._ready_documents)
-            self._show_converting_info_bar(pending)
+            pending = max(0, int(self._pending_files_count))
+            if pending > 0:
+                self._show_converting_info_bar(pending)
+            else:
+                self._hide_converting_info_bar()
             self._btn_generate.setEnabled(False)
 
         self._btn_save.setEnabled(True)
@@ -833,9 +836,10 @@ class PreviewPage(ProgressMixin, QWidget):
             )
             return
 
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在生成样本卡片" if is_zh else "Generating Sample Cards",
             "正在调用模型，请稍候" if is_zh else "Calling model, please wait",
+            duration=-1,
         )
 
         # Generate sample cards in background
@@ -919,10 +923,7 @@ class PreviewPage(ProgressMixin, QWidget):
         except Exception as e:
             self._update_ui_state()
             self._set_sample_preview_enabled(True)
-            self._finish_state_tooltip(
-                False,
-                "样本卡片生成失败" if is_zh else "Sample generation failed",
-            )
+            self._clear_progress_info_bar()
             InfoBar.error(
                 title="错误" if is_zh else "Error",
                 content=f"样本生成初始化失败：{e}"
@@ -943,10 +944,7 @@ class PreviewPage(ProgressMixin, QWidget):
         is_zh = self._main.config.language == "zh"
 
         if not cards:
-            self._finish_state_tooltip(
-                False,
-                "样本卡片生成失败" if is_zh else "Sample generation failed",
-            )
+            self._clear_progress_info_bar()
             InfoBar.warning(
                 title="警告" if is_zh else "Warning",
                 content="未能生成样本卡片" if is_zh else "Failed to generate sample cards",
@@ -958,10 +956,7 @@ class PreviewPage(ProgressMixin, QWidget):
             )
             return
 
-        self._finish_state_tooltip(
-            True,
-            "样本卡片生成完成" if is_zh else "Sample generation completed",
-        )
+        self._clear_progress_info_bar()
 
         # Show sample cards in a dialog
         from PyQt6.QtWidgets import QDialog, QTextEdit, QVBoxLayout
@@ -1025,10 +1020,7 @@ class PreviewPage(ProgressMixin, QWidget):
         self._set_sample_preview_enabled(True)
         is_zh = self._main.config.language == "zh"
         error_display = build_error_display(error, self._main.config.language)
-        self._finish_state_tooltip(
-            False,
-            "样本卡片生成失败" if is_zh else "Sample generation failed",
-        )
+        self._clear_progress_info_bar()
         InfoBar.error(
             title=error_display["title"],
             content=f"生成样本卡片失败：{error_display['content']}"
@@ -1785,6 +1777,8 @@ class PreviewPage(ProgressMixin, QWidget):
         self._cleanup_generate_worker()
         self._cleanup_push_worker()
         self._cleanup_sample_worker()
+        self._clear_progress_info_bar()
+        self._hide_converting_info_bar()
         if self._state_tooltip is not None and hasattr(self._state_tooltip, "deleteLater"):
             self._state_tooltip.deleteLater()
             self._state_tooltip = None

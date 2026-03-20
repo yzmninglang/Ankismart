@@ -151,6 +151,21 @@ def apply_compact_combo_metrics(
     if callable(set_fixed_height):
         set_fixed_height(target_control_height)
 
+    base_style = getattr(combo, "_ankismart_base_stylesheet", None)
+    if base_style is None:
+        style_sheet = getattr(combo, "styleSheet", None)
+        base_style = style_sheet() if callable(style_sheet) else ""
+        setattr(combo, "_ankismart_base_stylesheet", base_style)
+
+    compact_style = (
+        "\nComboBox, ModelComboBox, EditableComboBox {\n"
+        "    padding: 0px 31px 0px 11px;\n"
+        "}\n"
+    )
+    set_style_sheet = getattr(combo, "setStyleSheet", None)
+    if callable(set_style_sheet):
+        set_style_sheet(f"{base_style}{compact_style}")
+
     setattr(combo, "_ankismart_combo_item_height", target_popup_item_height)
 
     create_menu = getattr(combo, "_createComboMenu", None)

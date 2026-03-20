@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig
 from ankismart.core.task_models import build_default_task_run
@@ -14,12 +18,15 @@ from ankismart.ui.workflows import (
 from .import_page_test_utils import (
     DummyCombo,
     DummyLineEdit,
+    DummyMain,
     DummyModeCombo,
     DummySlider,
     DummySwitch,
     make_page,
     patch_infobar,
 )
+
+_APP = QApplication.instance() or QApplication([])
 
 
 def test_build_generation_config_single_mode() -> None:
@@ -208,7 +215,57 @@ def test_strategy_template_change_updates_sliders_immediately(monkeypatch):
     assert calls["success"] == []
 
 
-def test_apply_strategy_template_button_keeps_feedback(monkeypatch):
+def test_generation_preset_change_applies_immediately_without_feedback(monkeypatch):
+    page = make_page()
+    calls = patch_infobar(monkeypatch)
+    persisted: dict[str, object] = {}
+
+    class SwitchStub(DummySwitch):
+        def blockSignals(self, _blocked: bool) -> None:  # noqa: N802
+            return None
+
+    class PresetCombo:
+        def __init__(self) -> None:
+            self._data = ["default", "exam_dense"]
+            self._current = 1
+
+        def currentData(self) -> str:
+            return self._data[self._current]
+
+        def count(self) -> int:
+            return len(self._data)
+
+        def itemData(self, index: int) -> str:
+            return self._data[index]
+
+        def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+            self._current = index
+
+    page._generation_preset_combo = PresetCombo()
+    page._auto_target_count_switch = SwitchStub(True)
+    page._strategy_group_initialized = False
+    page._pending_generation_strategy_mix = None
+
+    def apply_runtime(config: AppConfig, *, persist: bool = True, changed_fields=None):
+        persisted["config"] = config
+        persisted["persist"] = persist
+        persisted["changed_fields"] = set(changed_fields or [])
+        page._main.config = config
+        return set(changed_fields or [])
+
+    page._main.apply_runtime_config = apply_runtime
+
+    ImportPage._on_generation_preset_changed(page)
+
+    assert page._total_count_input.text() == "24"
+    assert page._auto_target_count_switch.isChecked() is False
+    assert persisted["persist"] is True
+    assert persisted["changed_fields"] == {"generation_preset"}
+    assert persisted["config"].generation_preset == "exam_dense"
+    assert calls["success"] == []
+
+
+def test_strategy_template_change_keeps_no_feedback(monkeypatch):
     page = make_page()
     calls = patch_infobar(monkeypatch)
 
@@ -241,8 +298,7 @@ def test_apply_strategy_template_button_keeps_feedback(monkeypatch):
 
     ImportPage._apply_selected_strategy_template(page)
 
-    assert len(calls["success"]) == 1
-    assert "语言记忆" in calls["success"][0]["content"]
+    assert calls["success"] == []
 
 
 def test_cloud_ocr_page_progress_updates_progress_bar(monkeypatch):
@@ -310,6 +366,54 @@ def test_ocr_download_finished_uses_page_infobar_helper(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][0][1] == "success"
+
+
+def test_on_file_completed_excludes_md_docx_from_preview_pending_progress() -> None:
+    page = make_page()
+    preview_calls: list[int] = []
+    preview_page = SimpleNamespace(
+        isVisible=lambda: True,
+        add_converted_document=lambda document: None,
+        update_converting_status=lambda pending: preview_calls.append(pending),
+    )
+    page._main.batch_result = SimpleNamespace(documents=[])
+    page._main.preview_page = preview_page
+    page._file_status = {
+        "D:/docs/a.md": "completed",
+        "D:/docs/b.docx": "pending",
+    }
+    page._refresh_file_item_colors = lambda: None
+    page._file_name_to_keys = {
+        "a.md": ["D:/docs/a.md"],
+        "b.docx": ["D:/docs/b.docx"],
+    }
+
+    ImportPage._on_file_completed(
+        page,
+        "a.md",
+        SimpleNamespace(
+            file_name="a.md",
+            result=SimpleNamespace(source_path="D:/docs/a.md"),
+        ),
+    )
+
+    assert preview_calls == [0]
+
+
+def test_import_page_close_event_disposes_progress_infobar() -> None:
+    page = ImportPage(DummyMain())
+    progress_closed = {"value": False}
+
+    page._progress_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: progress_closed.__setitem__("value", True)},
+    )()
+
+    page.closeEvent(QCloseEvent())
+
+    assert progress_closed["value"] is True
+    assert page._progress_info_bar is None
 
 
 def test_cloud_ocr_message_progress_updates_status_text():

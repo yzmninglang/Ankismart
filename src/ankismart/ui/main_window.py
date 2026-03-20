@@ -220,6 +220,7 @@ NavigationPanel[transparent=true] {{
             nav_width = 150
         self.navigationInterface.setMinimumExpandWidth(nav_width)
         self.navigationInterface.setExpandWidth(nav_width)
+        self.navigationInterface.setReturnButtonVisible(True)
 
         # Get translated labels
         labels = self._get_navigation_labels()
@@ -497,7 +498,8 @@ NavigationPanel[transparent=true] {{
         tasks = self.task_runtime.list_resumable()
         self._resumable_tasks = tasks
         self._task_center_panel.render_tasks(tasks)
-        self._task_center_panel.setVisible(bool(tasks))
+        # Keep resumable task state, but don't render the floating overlay on top-left.
+        self._task_center_panel.hide()
 
     def register_task(self, task: TaskRun, *, activate: bool = True) -> TaskRun:
         registered = self.task_runtime.register(task)

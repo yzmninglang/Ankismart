@@ -55,6 +55,43 @@ def test_main_window_startup_smoke_budget(monkeypatch) -> None:
     window.close()
 
 
+def test_main_window_keeps_sidebar_back_action(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+
+    app = _get_app()
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+    window.show()
+    app.processEvents()
+
+    back_buttons = [
+        button
+        for button in window.navigationInterface.findChildren(object)
+        if hasattr(button, "toolTip")
+        and callable(button.toolTip)
+        and button.toolTip() == "Back"
+    ]
+
+    assert any(button.isVisible() for button in back_buttons if hasattr(button, "isVisible"))
+    window.close()
+    app.processEvents()
+
+
+def test_main_window_title_bar_uses_default_compact_size(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+
+    app = _get_app()
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+    window.show()
+    app.processEvents()
+
+    assert window.titleBar.height() == 36
+    assert getattr(window, "_title_bar_label", None) is None
+    assert getattr(window, "_title_bar_icon_label", None) is None
+
+    window.close()
+    app.processEvents()
+
+
 def test_main_window_loads_resumable_tasks(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
     monkeypatch.setattr("ankismart.ui.main_window.TASKS_PATH", tmp_path / "tasks.json")
@@ -67,6 +104,7 @@ def test_main_window_loads_resumable_tasks(monkeypatch, tmp_path) -> None:
 
     assert [item.task_id for item in window.resumable_tasks] == ["task-r1"]
     assert "task-r1" in window.task_center_panel._task_widgets
+    assert window.task_center_panel.isVisible() is False
     window.close()
 
 

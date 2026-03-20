@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication, QLabel
 from pytest import mark
 
@@ -501,6 +503,42 @@ def test_update_converting_status_shows_top_infobar(monkeypatch):
     assert page._btn_generate.isEnabled() is False
 
 
+def test_preview_sample_uses_progress_infobar_not_state_tooltip(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    main.config.active_provider = SimpleNamespace(
+        api_key="key",
+        base_url="https://api.test",
+        model="demo-model",
+        rpm_limit=60,
+    )
+    main.import_page.build_generation_config.return_value = {
+        "strategy_mix": [{"strategy": "basic", "ratio": 100}]
+    }
+    page = PreviewPage(main)
+    page._documents = [_make_doc("a.md", "# A")]
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        page,
+        "_show_state_tooltip",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected popup")),
+    )
+    monkeypatch.setattr(
+        page,
+        "_show_progress_info_bar",
+        lambda title, content, duration=1800: calls.append((title, content)),
+    )
+    monkeypatch.setattr(page, "_cleanup_sample_worker", lambda: None)
+    monkeypatch.setattr(page, "_set_sample_preview_enabled", lambda enabled: None)
+    monkeypatch.setattr("PyQt6.QtCore.QThread.start", lambda self: None)
+    monkeypatch.setattr("ankismart.card_gen.llm_client.LLMClient", lambda **kwargs: object())
+
+    page._on_preview_sample()
+
+    assert calls == [("正在生成样本卡片", "正在调用模型，请稍候")]
+
+
 def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"
@@ -620,16 +658,16 @@ def test_build_documents_filters_pending_regenerate_source_documents():
 
     assert [doc.file_name for doc in docs] == ["b.md"]
 
-def test_sample_error_marks_state_tooltip_failed(monkeypatch):
+def test_sample_error_clears_progress_infobar(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"
     page = PreviewPage(main)
-    calls: list[tuple[bool, str]] = []
+    calls = {"cleared": 0}
 
     monkeypatch.setattr(
         page,
-        "_finish_state_tooltip",
-        lambda success, content: calls.append((success, content)),
+        "_clear_progress_info_bar",
+        lambda: calls.__setitem__("cleared", calls["cleared"] + 1),
     )
     monkeypatch.setattr(
         "ankismart.ui.preview_page.build_error_display",
@@ -639,4 +677,48 @@ def test_sample_error_marks_state_tooltip_failed(monkeypatch):
 
     page._on_sample_error("boom")
 
-    assert calls == [(False, "样本卡片生成失败")]
+    assert calls["cleared"] == 1
+
+
+def test_load_documents_skips_converting_infobar_when_pending_progress_count_is_zero(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+    batch = _make_batch(_make_doc("a.md", "# A"))
+    show_calls: list[int] = []
+
+    monkeypatch.setattr(
+        page,
+        "_show_converting_info_bar",
+        lambda pending: show_calls.append(pending),
+    )
+
+    page.load_documents(batch, pending_files_count=0, total_expected=2)
+
+    assert show_calls == []
+    assert page._btn_generate.isEnabled() is False
+
+
+def test_close_event_clears_progress_infobars():
+    main = _make_main_window()
+    page = PreviewPage(main)
+    progress_closed = {"value": False}
+    converting_closed = {"value": False}
+
+    page._progress_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: progress_closed.__setitem__("value", True)},
+    )()
+    page._converting_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: converting_closed.__setitem__("value", True)},
+    )()
+
+    page.closeEvent(QCloseEvent())
+
+    assert progress_closed["value"] is True
+    assert converting_closed["value"] is True
+    assert page._progress_info_bar is None
+    assert page._converting_info_bar is None

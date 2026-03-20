@@ -238,6 +238,38 @@ def test_import_page_applies_exam_dense_preset() -> None:
     page.close()
 
 
+def test_import_page_uses_compact_heights_for_preset_combos() -> None:
+    page = ImportPage(DummyMain())
+    page.show()
+    _APP.processEvents()
+    _APP.processEvents()
+
+    assert page._generation_preset_combo.height() <= 22
+    assert page._strategy_template_combo.height() <= 22
+    assert "padding: 0px 31px 0px 11px;" in page._generation_preset_combo.styleSheet()
+    assert "padding: 0px 31px 0px 11px;" in page._strategy_template_combo.styleSheet()
+    page.close()
+
+
+def test_import_page_does_not_render_apply_buttons_for_preset_combos() -> None:
+    page = ImportPage(DummyMain())
+
+    texts: list[str] = []
+    for widget in page.findChildren(object):
+        text = getattr(widget, "text", None)
+        if callable(text):
+            try:
+                value = text()
+            except TypeError:
+                continue
+            if isinstance(value, str) and value:
+                texts.append(value)
+
+    assert texts.count("应用") == 0
+    assert texts.count("Apply") == 0
+    page.close()
+
+
 def test_batch_convert_done_shows_errors(monkeypatch):
     page = make_page()
     warnings_shown = []
