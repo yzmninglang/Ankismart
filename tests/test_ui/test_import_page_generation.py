@@ -344,7 +344,6 @@ def test_cloud_ocr_page_progress_updates_progress_bar(monkeypatch):
 
 def test_ocr_download_finished_uses_page_infobar_helper(monkeypatch):
     page = make_page()
-    page._state_tooltip = None
     page._model_check_in_progress = True
     page._last_ocr_progress_message = ""
     calls: list[tuple[tuple, dict]] = []

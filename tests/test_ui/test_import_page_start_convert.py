@@ -13,7 +13,6 @@ from .import_page_test_utils import (
     DummyCombo,
     DummySlider,
     make_page,
-    make_warning_box_collector,
     patch_infobar,
 )
 
@@ -174,10 +173,6 @@ def test_ensure_ocr_models_ready_does_not_create_state_tooltip(monkeypatch):
         lambda *args, **kwargs: info_calls.append((args, kwargs)),
         raising=False,
     )
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.StateToolTip",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
-    )
 
     class _DialogStub:
         selected_tier = "lite"
@@ -234,10 +229,6 @@ def test_apply_cuda_strategy_upgrades_lite_once(monkeypatch):
 
     monkeypatch.setattr("ankismart.ui.import_page.is_cuda_available", lambda **kwargs: True)
     monkeypatch.setattr("ankismart.ui.import_page.save_config", lambda cfg: None)
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.QMessageBox",
-        type("_MB", (), {"information": staticmethod(lambda *a, **k: None)}),
-    )
 
     ImportPage._apply_cuda_strategy_once(page)
 
@@ -255,15 +246,10 @@ def test_start_convert_rejects_empty_api_key_for_non_ollama(monkeypatch):
         active_provider_id="p1",
     )
 
-    warnings: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.QMessageBox", make_warning_box_collector(warnings)
-    )
     monkeypatch.setattr(ImportPage, "_ensure_ocr_models_ready", lambda self: True)
 
     ImportPage._start_convert(page)
 
-    assert len(warnings) == 0
     assert len(infobar_calls["warning"]) == 1
     assert "API" in infobar_calls["warning"][0]["content"]
 
@@ -307,15 +293,10 @@ def test_start_convert_rejects_empty_deck(monkeypatch):
     page._file_paths = [Path("a.md")]
     page._deck_combo = DummyCombo("   ")
 
-    warnings: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.QMessageBox", make_warning_box_collector(warnings)
-    )
     monkeypatch.setattr(ImportPage, "_ensure_ocr_models_ready", lambda self: True)
 
     ImportPage._start_convert(page)
 
-    assert len(warnings) == 0
     assert len(infobar_calls["warning"]) == 1
     assert "牌组" in infobar_calls["warning"][0]["content"]
 
@@ -329,15 +310,10 @@ def test_start_convert_rejects_mixed_mode_without_positive_ratio(monkeypatch):
         ("cloze", DummySlider(0), None),
     ]
 
-    warnings: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        "ankismart.ui.import_page.QMessageBox", make_warning_box_collector(warnings)
-    )
     monkeypatch.setattr(ImportPage, "_ensure_ocr_models_ready", lambda self: True)
 
     ImportPage._start_convert(page)
 
-    assert len(warnings) == 0
     assert len(infobar_calls["warning"]) == 1
     assert "占比" in infobar_calls["warning"][0]["content"]
 
@@ -370,7 +346,6 @@ def test_download_missing_ocr_models_forwards_progress_callback(monkeypatch):
 
 def test_ocr_download_progress_shows_infobar_and_deduplicates(monkeypatch):
     page = make_page()
-    page._state_tooltip = None
     page._last_ocr_progress_message = ""
     infobar_calls = patch_infobar(monkeypatch)
 

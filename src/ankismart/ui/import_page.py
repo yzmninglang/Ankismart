@@ -16,9 +16,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtWidgets import (
-    QMessageBox as _QMessageBox,
-)
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -39,7 +36,6 @@ from qfluentwidgets import (
     SettingCardGroup,
     SimpleCardWidget,
     Slider,
-    StateToolTip,
     SubtitleLabel,
     SwitchButton,
     isDarkTheme,
@@ -82,8 +78,6 @@ from ankismart.ui.workflows import (
 )
 
 logger = get_logger(__name__)
-# Backward compatibility for tests patching ankismart.ui.import_page.QMessageBox.
-QMessageBox = _QMessageBox
 
 _OCR_FILE_SUFFIXES = {
     ".pdf",
@@ -562,7 +556,6 @@ class ImportPage(ProgressMixin, QWidget):
         self._worker: BatchConvertWorker | None = None
         self._deck_loader: DeckLoaderWorker | None = None
         self._ocr_download_worker: OCRModelDownloadWorker | None = None
-        self._state_tooltip: StateToolTip | None = None
         self._progress_info_bar = None
         self._model_check_in_progress = False
         self._last_ocr_progress_message: str = ""
@@ -1593,12 +1586,6 @@ class ImportPage(ProgressMixin, QWidget):
         self.__dict__["_deck_loader"] = None
         if hasattr(worker, "deleteLater"):
             worker.deleteLater()
-
-    def _dispose_state_tooltip(self) -> None:
-        tooltip = self.__dict__.get("_state_tooltip")
-        self.__dict__["_state_tooltip"] = None
-        if tooltip is not None and hasattr(tooltip, "deleteLater"):
-            tooltip.deleteLater()
 
     def _dispose_progress_info_bar(self) -> None:
         info_bar = self.__dict__.get("_progress_info_bar")
@@ -2722,7 +2709,6 @@ class ImportPage(ProgressMixin, QWidget):
         self._cleanup_batch_worker()
         self._cleanup_ocr_download_worker()
         self._cleanup_deck_loader_worker()
-        self._dispose_state_tooltip()
         self._dispose_progress_info_bar()
         super().closeEvent(event)
 

@@ -14,46 +14,6 @@ from ankismart.core.config import AppConfig
 if TYPE_CHECKING:
     from qfluentwidgets import ProgressBar, ProgressRing, PushButton
 
-
-def show_error(parent: QWidget, title: str, message: str, duration: int = 4000) -> None:
-    """Display an error notification using InfoBar."""
-    InfoBar.error(
-        title=title,
-        content=message,
-        orient=Qt.Orientation.Horizontal,
-        isClosable=True,
-        position=InfoBarPosition.TOP,
-        duration=duration,
-        parent=parent,
-    )
-
-
-def show_success(parent: QWidget, message: str, duration: int = 2000) -> None:
-    """Display a success notification."""
-    InfoBar.success(
-        title="成功",
-        content=message,
-        orient=Qt.Orientation.Horizontal,
-        isClosable=True,
-        position=InfoBarPosition.TOP,
-        duration=duration,
-        parent=parent,
-    )
-
-
-def show_info(parent: QWidget, message: str, duration: int = 2000) -> None:
-    """Display an info notification."""
-    InfoBar.info(
-        title="提示",
-        content=message,
-        orient=Qt.Orientation.Horizontal,
-        isClosable=True,
-        position=InfoBarPosition.TOP,
-        duration=duration,
-        parent=parent,
-    )
-
-
 def request_infobar_confirmation(
     parent: QWidget,
     confirmations: dict[str, float],
