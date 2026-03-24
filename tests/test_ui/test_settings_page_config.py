@@ -456,6 +456,11 @@ def test_settings_page_uses_llm_group_as_top_content(_qapp) -> None:
 def test_clear_cache_confirmation_dialog_uses_custom_clean_styles(_qapp, monkeypatch) -> None:
     main, _ = make_main()
     page = SettingsPage(main)
+    monkeypatch.setattr("ankismart.ui.settings_page.get_theme_accent_hex", lambda: "#123456")
+    monkeypatch.setattr(
+        "ankismart.ui.settings_page.get_theme_accent_hover_hex",
+        lambda **_: "#0f2e4d",
+    )
 
     monkeypatch.setattr(
         "ankismart.converter.cache.get_cache_stats",
@@ -485,6 +490,8 @@ def test_clear_cache_confirmation_dialog_uses_custom_clean_styles(_qapp, monkeyp
     assert "border-radius: 14px" in style
     assert "#clearCacheConfirmButton" in style
     assert "#clearCacheCancelButton" in style
+    assert "#123456" in style
+    assert "#0f2e4d" in style
     assert "min-width: 108px" in style
     assert "min-height: 40px" in style
 

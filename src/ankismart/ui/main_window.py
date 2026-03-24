@@ -28,16 +28,15 @@ from .i18n import set_language, t
 from .import_page import ImportPage
 from .shortcuts import ShortcutKeys, create_shortcut
 from .styles import (
-    DARK_PAGE_BACKGROUND_HEX,
     DEFAULT_WINDOW_HEIGHT,
     DEFAULT_WINDOW_WIDTH,
-    FIXED_PAGE_BACKGROUND_HEX,
-    FIXED_THEME_ACCENT_HEX,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
     TITLE_BAR_HEIGHT,
     get_display_scale,
+    get_page_background_color,
     get_stylesheet,
+    get_theme_accent_hex,
     scale_px,
 )
 from .task_center import TaskCenterPanel
@@ -116,7 +115,10 @@ class MainWindow(FluentWindow):
         # Keep app chrome color fully controlled by our stylesheet/background config.
         # Win11 mica blends with system accent and makes title bar color unstable.
         self.setMicaEffectEnabled(False)
-        self.setCustomBackgroundColor(FIXED_PAGE_BACKGROUND_HEX, DARK_PAGE_BACKGROUND_HEX)
+        self.setCustomBackgroundColor(
+            get_page_background_color(dark=False),
+            get_page_background_color(dark=True),
+        )
 
         screen = self.screen() or QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
@@ -156,9 +158,9 @@ class MainWindow(FluentWindow):
         self._apply_fixed_background_regions()
 
     def _apply_fixed_background_regions(self) -> None:
-        """Apply themed backgrounds: blue in light mode, deep gray in dark mode."""
-        bg_light = FIXED_PAGE_BACKGROUND_HEX
-        bg_dark = DARK_PAGE_BACKGROUND_HEX
+        """Apply themed backgrounds for window frame regions."""
+        bg_light = get_page_background_color(dark=False)
+        bg_dark = get_page_background_color(dark=True)
         base_light_qss = f"FluentWindowBase {{ background-color: {bg_light}; }}"
         base_dark_qss = f"FluentWindowBase {{ background-color: {bg_dark}; }}"
         setCustomStyleSheet(self, base_light_qss, base_dark_qss)
@@ -437,28 +439,33 @@ NavigationPanel[transparent=true] {{
             theme = Theme.AUTO
         else:
             theme = Theme.LIGHT
+        accent_hex = get_theme_accent_hex()
 
         app = QApplication.instance()
         theme_state_unchanged = bool(
             app is not None
             and app.property("_ankismart_theme_mode") == theme_name
-            and app.property("_ankismart_theme_color") == FIXED_THEME_ACCENT_HEX
+            and app.property("_ankismart_theme_color") == accent_hex
         )
 
         try:
             if not theme_state_unchanged:
                 setTheme(theme, lazy=True)
-                setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=True)
+                setThemeColor(accent_hex, lazy=True)
         except RuntimeError as exc:
             # qfluentwidgets may raise this during rapid style manager mutations.
             if "dictionary changed size during iteration" not in str(exc):
                 raise
             if not theme_state_unchanged:
                 setTheme(theme, lazy=False)
-                setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=False)
+                setThemeColor(accent_hex, lazy=False)
         if app is not None and not theme_state_unchanged:
             app.setProperty("_ankismart_theme_mode", theme_name)
-            app.setProperty("_ankismart_theme_color", FIXED_THEME_ACCENT_HEX)
+            app.setProperty("_ankismart_theme_color", accent_hex)
+        self.setCustomBackgroundColor(
+            get_page_background_color(dark=False),
+            get_page_background_color(dark=True),
+        )
         if apply_stylesheet:
             self._apply_global_stylesheet()
 
@@ -489,6 +496,7 @@ NavigationPanel[transparent=true] {{
             update_theme = getattr(page, "update_theme", None)
             if callable(update_theme):
                 update_theme()
+        self._task_center_panel.update_theme()
         self._update_theme_button_tooltip()
 
     def _on_task_event(self, _event: TaskEvent) -> None:

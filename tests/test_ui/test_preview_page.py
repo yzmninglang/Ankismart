@@ -262,6 +262,22 @@ class TestMarkdownHighlighter:
         for pattern, fmt in hl._rules:
             assert hasattr(pattern, "finditer")
 
+    def test_highlighter_uses_theme_accent_for_heading_link_and_list(self, monkeypatch):
+        monkeypatch.setattr("ankismart.ui.preview_page.isDarkTheme", lambda: False)
+        monkeypatch.setattr(
+            "ankismart.ui.preview_page.get_theme_accent_text_hex",
+            lambda **_: "#123456",
+        )
+        hl = MarkdownHighlighter()
+        color_by_pattern = {
+            pattern.pattern: fmt.foreground().color().name()
+            for pattern, fmt in hl._rules
+        }
+
+        assert color_by_pattern[r"^#{1,6}\s+.*$"] == "#123456"
+        assert color_by_pattern[r"\[([^\]]+)\]\(([^)]+)\)"] == "#123456"
+        assert color_by_pattern[r"^[\*\-\+]\s+.*$"] == "#123456"
+
 
 class TestPreviewPageFlow:
     def test_push_finished_does_not_auto_navigate(self):

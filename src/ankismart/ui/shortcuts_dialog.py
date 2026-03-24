@@ -8,6 +8,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, PrimaryPushButton, ScrollAre
 
 from .i18n import t
 from .shortcuts import get_all_shortcuts
+from .styles import get_theme_accent_text_hex
 
 
 class ShortcutsHelpDialog(QDialog):
@@ -81,7 +82,7 @@ class ShortcutsHelpDialog(QDialog):
         """Create a single shortcut row."""
         dark = isDarkTheme()
         border_color = "rgba(255, 255, 255, 0.12)" if dark else "#E0E0E0"
-        key_text_color = "#60A5FA" if dark else "#0078D4"
+        key_text_color = get_theme_accent_text_hex(dark=dark)
         key_bg_color = "rgba(255, 255, 255, 0.08)" if dark else "#F0F0F0"
         desc_text_color = "#E5E7EB" if dark else "#333333"
 

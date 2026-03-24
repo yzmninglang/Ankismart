@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
-from PyQt6.QtGui import QFont, QScreen
+from PyQt6.QtGui import QColor, QFont, QScreen
 from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import BodyLabel, isDarkTheme
 
@@ -16,9 +17,11 @@ logger = get_logger("ui.styles")
 COLOR_SUCCESS = "#10b981"  # Green
 COLOR_ERROR = "#ef4444"  # Red
 COLOR_WARNING = "#f59e0b"  # Orange
-COLOR_INFO = "#3b82f6"  # Blue
-FIXED_THEME_ACCENT_HEX = "#2563eb"
-FIXED_THEME_ACCENT_RGB = "37, 99, 235"
+DEFAULT_THEME_ACCENT_HEX = "#2563eb"
+DEFAULT_THEME_ACCENT_RGB = "37, 99, 235"
+COLOR_INFO = DEFAULT_THEME_ACCENT_HEX
+FIXED_THEME_ACCENT_HEX = DEFAULT_THEME_ACCENT_HEX
+FIXED_THEME_ACCENT_RGB = DEFAULT_THEME_ACCENT_RGB
 FIXED_PAGE_BACKGROUND_HEX = "#f5f7fb"
 DARK_PAGE_BACKGROUND_HEX = "#202020"
 
@@ -87,6 +90,130 @@ FONT_SIZE_XLARGE = 20
 FONT_SIZE_TITLE = 24
 FONT_SIZE_PAGE_TITLE = 22
 TEXT_SCALE_FACTOR = 0.78
+_THEME_ACCENT_CACHE: tuple[int, str] = (0, DEFAULT_THEME_ACCENT_HEX)
+
+
+def _normalize_hex_color(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not text.startswith("#"):
+        text = f"#{text}"
+    if len(text) != 7:
+        return None
+    try:
+        int(text[1:], 16)
+    except ValueError:
+        return None
+    return text.lower()
+
+
+def _hex_to_rgb_tuple(hex_color: str) -> tuple[int, int, int]:
+    color = QColor(hex_color)
+    return color.red(), color.green(), color.blue()
+
+
+def _rgb_tuple_to_hex(rgb: tuple[int, int, int]) -> str:
+    red, green, blue = rgb
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _blend_hex_colors(base_hex: str, overlay_hex: str, ratio: float) -> str:
+    base = QColor(base_hex)
+    overlay = QColor(overlay_hex)
+    amount = max(0.0, min(ratio, 1.0))
+    rgb = (
+        round(base.red() * (1 - amount) + overlay.red() * amount),
+        round(base.green() * (1 - amount) + overlay.green() * amount),
+        round(base.blue() * (1 - amount) + overlay.blue() * amount),
+    )
+    return _rgb_tuple_to_hex(rgb)
+
+
+def _read_windows_dwm_accent_hex() -> str | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        color = ctypes.c_uint()
+        opaque = ctypes.c_bool()
+        result = ctypes.windll.dwmapi.DwmGetColorizationColor(
+            ctypes.byref(color),
+            ctypes.byref(opaque),
+        )
+        if result != 0:
+            return None
+        argb = int(color.value)
+        red = (argb >> 16) & 0xFF
+        green = (argb >> 8) & 0xFF
+        blue = argb & 0xFF
+        return _rgb_tuple_to_hex((red, green, blue))
+    except Exception:
+        return None
+
+
+def _read_windows_registry_accent_hex() -> str | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\DWM") as key:
+            value, _ = winreg.QueryValueEx(key, "ColorizationColor")
+        argb = int(value)
+        red = (argb >> 16) & 0xFF
+        green = (argb >> 8) & 0xFF
+        blue = argb & 0xFF
+        return _rgb_tuple_to_hex((red, green, blue))
+    except Exception:
+        return None
+
+
+def _read_windows_accent_hex() -> str | None:
+    return _read_windows_dwm_accent_hex() or _read_windows_registry_accent_hex()
+
+
+def get_theme_accent_hex() -> str:
+    global _THEME_ACCENT_CACHE
+
+    reader_id = id(_read_windows_accent_hex)
+    if _THEME_ACCENT_CACHE[0] == reader_id:
+        return _THEME_ACCENT_CACHE[1]
+
+    _THEME_ACCENT_CACHE = (reader_id, DEFAULT_THEME_ACCENT_HEX)
+    return DEFAULT_THEME_ACCENT_HEX
+
+
+def refresh_theme_accent_cache() -> str:
+    global _THEME_ACCENT_CACHE
+
+    reader_id = id(_read_windows_accent_hex)
+    accent_hex = _normalize_hex_color(_read_windows_accent_hex()) or DEFAULT_THEME_ACCENT_HEX
+    _THEME_ACCENT_CACHE = (reader_id, accent_hex)
+    return accent_hex
+
+
+def get_theme_accent_rgb() -> str:
+    red, green, blue = _hex_to_rgb_tuple(get_theme_accent_hex())
+    return f"{red}, {green}, {blue}"
+
+
+def get_theme_accent_text_hex(*, dark: bool | None = None) -> str:
+    if dark is None:
+        dark = isDarkTheme()
+    accent_hex = get_theme_accent_hex()
+    if not dark:
+        return accent_hex
+    return _blend_hex_colors(accent_hex, "#ffffff", 0.35)
+
+
+def get_theme_accent_hover_hex(*, dark: bool | None = None) -> str:
+    if dark is None:
+        dark = isDarkTheme()
+    accent_hex = get_theme_accent_hex()
+    overlay = "#ffffff" if dark else "#000000"
+    return _blend_hex_colors(accent_hex, overlay, 0.16)
 
 
 def get_display_scale(*, screen: QScreen | None = None) -> float:
@@ -210,7 +337,7 @@ class Colors:
     BORDER = "#e5e7eb"
     TEXT_PRIMARY = "#111827"
     TEXT_SECONDARY = "#6b7280"
-    ACCENT = FIXED_THEME_ACCENT_HEX
+    ACCENT = DEFAULT_THEME_ACCENT_HEX
 
 
 class DarkColors:
@@ -221,7 +348,7 @@ class DarkColors:
     BORDER = "#3a3a3a"
     TEXT_PRIMARY = "#e6e6e6"
     TEXT_SECONDARY = "#a6a6a6"
-    ACCENT = FIXED_THEME_ACCENT_HEX
+    ACCENT = DEFAULT_THEME_ACCENT_HEX
 
 
 @dataclass(frozen=True)
@@ -241,6 +368,7 @@ def get_list_widget_palette(*, dark: bool | None = None) -> ListWidgetPalette:
     """Get unified list widget palette for light/dark theme."""
     if dark is None:
         dark = isDarkTheme()
+    accent_rgb = get_theme_accent_rgb()
 
     if dark:
         return ListWidgetPalette(
@@ -249,7 +377,7 @@ def get_list_widget_palette(*, dark: bool | None = None) -> ListWidgetPalette:
             text="rgba(255, 255, 255, 1)",
             text_disabled="rgba(255, 255, 255, 0.42)",
             hover="rgba(255, 255, 255, 0.06)",
-            selected_background=f"rgba({FIXED_THEME_ACCENT_RGB}, 0.30)",
+            selected_background=f"rgba({accent_rgb}, 0.30)",
             selected_text="rgba(255, 255, 255, 1)",
         )
 
@@ -259,22 +387,25 @@ def get_list_widget_palette(*, dark: bool | None = None) -> ListWidgetPalette:
         text="rgba(0, 0, 0, 1)",
         text_disabled="rgba(0, 0, 0, 0.42)",
         hover="rgba(0, 0, 0, 0.04)",
-        selected_background=f"rgba({FIXED_THEME_ACCENT_RGB}, 0.15)",
+        selected_background=f"rgba({accent_rgb}, 0.15)",
         selected_text="rgba(0, 0, 0, 1)",
     )
 
 
 def get_page_background_color(*, dark: bool | None = None) -> str:
-    """Get page background color by theme: fixed blue for light, deep gray for dark."""
+    """Get page background color by theme with light-mode accent tint."""
     if dark is None:
         dark = isDarkTheme()
-    return DARK_PAGE_BACKGROUND_HEX if dark else FIXED_PAGE_BACKGROUND_HEX
+    if dark:
+        return DARK_PAGE_BACKGROUND_HEX
+    return _blend_hex_colors(get_theme_accent_hex(), "#ffffff", 0.94)
 
 
 def get_stylesheet(*, dark: bool = False) -> str:
     """Build the main app stylesheet for light/dark mode."""
     palette = DarkColors if dark else Colors
     page_background = get_page_background_color(dark=dark)
+    accent = get_theme_accent_text_hex(dark=dark)
     scale = get_display_scale()
     combo_text_px = scale_text_px(FONT_SIZE_MEDIUM, scale=scale, min_value=12)
     input_radius = scale_px(8, scale=scale, min_value=8)
@@ -367,7 +498,7 @@ QPushButton, QToolButton {{
 }}
 
 QPushButton:hover, QToolButton:hover {{
-    border-color: {palette.ACCENT};
+    border-color: {accent};
 }}
 
 ComboBox, ModelComboBox, EditableComboBox {{

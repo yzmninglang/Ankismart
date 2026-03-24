@@ -47,6 +47,7 @@ from ankismart.ui.styles import (
     SPACING_SMALL,
     apply_compact_combo_metrics,
     apply_page_title_style,
+    get_theme_accent_text_hex,
 )
 from ankismart.ui.task_runtime import TaskEvent
 from ankismart.ui.workers import ExportWorker, PushWorker
@@ -75,6 +76,8 @@ _STRUCTURE_ERROR_TEXTS = {
 def _localized_text(mapping: dict[str, tuple[str, str]], key: str, lang: str) -> str:
     zh_text, en_text = mapping.get(key, (key, key))
     return zh_text if lang == "zh" else en_text
+
+
 def _format_structure_error(error_key: str, lang: str) -> str:
     return _localized_text(_STRUCTURE_ERROR_TEXTS, str(error_key or "").strip(), lang)
 
@@ -174,7 +177,11 @@ class ResultPage(QWidget):
         stats_row.setSpacing(SPACING_MEDIUM)
 
         lang = getattr(self._main.config, "language", "zh")
-        self._card_total = self._create_stat_card(t("result.total_cards", lang), "0", "#409EFF")
+        self._card_total = self._create_stat_card(
+            t("result.total_cards", lang),
+            "0",
+            get_theme_accent_text_hex(),
+        )
         self._card_success = self._create_stat_card(
             t("result.success_pushed", lang), "0", "#67C23A"
         )
@@ -681,6 +688,11 @@ class ResultPage(QWidget):
         title_label = card.findChild(CaptionLabel, "stat_title")
         if title_label:
             title_label.setText(title)
+
+    def _set_stat_card_color(self, card: CardWidget, color: str) -> None:
+        value_label = card.findChild(TitleLabel, "stat_value")
+        if value_label:
+            value_label.setStyleSheet(f"color: {color};")
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
         """页面显示时刷新数据。"""
@@ -1493,9 +1505,7 @@ class ResultPage(QWidget):
 
     def update_theme(self):
         """Update theme-dependent components when theme changes."""
-        # ResultPage uses QFluentWidgets components that handle theme automatically
-        # No custom styling that needs manual updates
-        pass
+        self._set_stat_card_color(self._card_total, get_theme_accent_text_hex())
 
 
 class BatchEditTagsDialog(MessageBoxBase):

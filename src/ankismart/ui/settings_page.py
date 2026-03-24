@@ -62,6 +62,8 @@ from ankismart.ui.styles import (
     SPACING_MEDIUM,
     get_list_widget_palette,
     get_page_background_color,
+    get_theme_accent_hex,
+    get_theme_accent_hover_hex,
 )
 
 if TYPE_CHECKING:
@@ -2106,13 +2108,13 @@ class SettingsPage(ScrollArea):
                 font-weight: 600;
             }}
             QMessageBox QPushButton#clearCacheConfirmButton {{
-                background-color: #2563eb;
-                border: 1px solid #2563eb;
+                background-color: {get_theme_accent_hex()};
+                border: 1px solid {get_theme_accent_hex()};
                 color: white;
             }}
             QMessageBox QPushButton#clearCacheConfirmButton:hover {{
-                background-color: #1d4ed8;
-                border-color: #1d4ed8;
+                background-color: {get_theme_accent_hover_hex(dark=isDarkTheme())};
+                border-color: {get_theme_accent_hover_hex(dark=isDarkTheme())};
             }}
             QMessageBox QPushButton#clearCacheCancelButton {{
                 background-color: transparent;

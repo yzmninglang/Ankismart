@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication
+from qfluentwidgets import TitleLabel
 
 import ankismart.ui.result_page as result_page_module
 from ankismart.core.models import CardDraft, CardPushStatus, PushResult
@@ -579,6 +580,27 @@ def test_result_page_shows_warning_style_for_cards_with_quality_flags(_qapp) -> 
 
     assert page._table.item(0, 2).text() == "需关注"
     assert "缺少解析" in page._table.item(0, 3).text()
+
+
+def test_result_page_total_stat_card_uses_theme_accent(_qapp, monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#123456")
+    page = ResultPage(_FakeMainWindow())
+    value_label = page._card_total.findChild(TitleLabel, "stat_value")
+
+    assert value_label is not None
+    assert "#123456" in value_label.styleSheet()
+
+
+def test_result_page_update_theme_refreshes_total_stat_card(_qapp, monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#123456")
+    page = ResultPage(_FakeMainWindow())
+    value_label = page._card_total.findChild(TitleLabel, "stat_value")
+    assert value_label is not None
+
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#654321")
+    page.update_theme()
+
+    assert "#654321" in value_label.styleSheet()
 
 
 def test_result_page_displays_human_readable_blocking_reason_for_invalid_structure(

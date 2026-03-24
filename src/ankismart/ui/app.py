@@ -28,7 +28,7 @@ from qfluentwidgets import InfoBar, InfoBarPosition, Theme, isDarkTheme, setThem
 from ankismart import __version__
 from ankismart.core.config import CONFIG_DIR, create_config_backup, load_config, save_config
 from ankismart.core.logging import get_logger, setup_logging
-from ankismart.ui.styles import FIXED_THEME_ACCENT_HEX, get_stylesheet
+from ankismart.ui.styles import get_stylesheet, refresh_theme_accent_cache
 
 if TYPE_CHECKING:
     from ankismart.ui.main_window import MainWindow
@@ -116,16 +116,17 @@ def _apply_theme(theme_name: str) -> None:
     else:
         theme = Theme.LIGHT  # Default fallback
         theme_name = "light"
+    accent_hex = refresh_theme_accent_cache()
 
     try:
         setTheme(theme, lazy=True)
-        setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=True)
+        setThemeColor(accent_hex, lazy=True)
     except RuntimeError as exc:
         # qfluentwidgets may raise this during rapid style manager mutations.
         if "dictionary changed size during iteration" not in str(exc):
             raise
         setTheme(theme, lazy=False)
-        setThemeColor(FIXED_THEME_ACCENT_HEX, lazy=False)
+        setThemeColor(accent_hex, lazy=False)
     app = QApplication.instance()
     if app is not None:
         css = get_stylesheet(dark=isDarkTheme())

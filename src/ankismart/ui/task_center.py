@@ -12,6 +12,7 @@ from qfluentwidgets import (
 )
 
 from ankismart.core.task_models import TaskRun, TaskStatus
+from ankismart.ui.styles import get_theme_accent_text_hex
 
 
 class TaskCenterPanel(SimpleCardWidget):
@@ -23,6 +24,7 @@ class TaskCenterPanel(SimpleCardWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._language = "zh"
+        self._tasks: list[TaskRun] = []
         self._task_widgets: dict[str, QWidget] = {}
 
         layout = QVBoxLayout(self)
@@ -52,6 +54,7 @@ class TaskCenterPanel(SimpleCardWidget):
         self.render_tasks([task])
 
     def render_tasks(self, tasks: list[TaskRun]) -> None:
+        self._tasks = list(tasks)
         self._clear_task_widgets()
 
         if not tasks:
@@ -66,6 +69,9 @@ class TaskCenterPanel(SimpleCardWidget):
             widget = self._build_task_widget(task)
             self._task_widgets[task.task_id] = widget
             self._tasks_layout.addWidget(widget)
+
+    def update_theme(self) -> None:
+        self.render_tasks(self._tasks)
 
     def _clear_task_widgets(self) -> None:
         for widget in self._task_widgets.values():
@@ -154,7 +160,7 @@ class TaskCenterPanel(SimpleCardWidget):
     def _status_style(status: TaskStatus) -> str:
         colors = {
             TaskStatus.PENDING: "#909399",
-            TaskStatus.RUNNING: "#409EFF",
+            TaskStatus.RUNNING: get_theme_accent_text_hex(),
             TaskStatus.FAILED: "#F56C6C",
             TaskStatus.COMPLETED: "#67C23A",
             TaskStatus.CANCELLED: "#E6A23C",

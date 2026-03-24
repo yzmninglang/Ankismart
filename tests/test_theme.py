@@ -15,9 +15,9 @@ from ankismart.ui.main_window import MainWindow
 from ankismart.ui.shortcuts_dialog import ShortcutsHelpDialog
 from ankismart.ui.styles import (
     DARK_PAGE_BACKGROUND_HEX,
-    FIXED_PAGE_BACKGROUND_HEX,
     Colors,
     DarkColors,
+    get_page_background_color,
 )
 
 _APP = QApplication.instance() or QApplication([])
@@ -37,6 +37,12 @@ def _make_card_preview_main() -> MagicMock:
 
 def test_theme_switching(monkeypatch) -> None:
     monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+    accent_calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr("ankismart.ui.main_window.get_theme_accent_hex", lambda: "#123456")
+    monkeypatch.setattr(
+        "ankismart.ui.main_window.setThemeColor",
+        lambda color, lazy=False: accent_calls.append((color, lazy)),
+    )
 
     app = _get_app()
     window = MainWindow(config=AppConfig(theme="light", language="zh"))
@@ -53,7 +59,9 @@ def test_theme_switching(monkeypatch) -> None:
     app.processEvents()
     assert window.config.theme == "light"
     assert Colors.TEXT_PRIMARY in app.styleSheet()
-    assert FIXED_PAGE_BACKGROUND_HEX in app.styleSheet()
+    assert get_page_background_color(dark=False) in app.styleSheet()
+    assert any(color == "#123456" for color, _ in accent_calls)
+    assert app.property("_ankismart_theme_color") == "#123456"
 
     window.switch_theme("auto")
     app.processEvents()
@@ -81,6 +89,42 @@ def test_card_preview_dark_class_keeps_compatibility() -> None:
 def test_shortcuts_dialog_can_construct_without_crash() -> None:
     dialog = ShortcutsHelpDialog("zh")
     dialog.close()
+
+
+def test_shortcuts_dialog_uses_theme_accent_for_shortcut_key(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.shortcuts_dialog.isDarkTheme", lambda: False)
+    monkeypatch.setattr(
+        "ankismart.ui.shortcuts_dialog.get_theme_accent_text_hex",
+        lambda **_: "#123456",
+    )
+
+    dialog = ShortcutsHelpDialog("zh")
+    row = dialog._create_shortcut_row("Ctrl+S", "保存")
+    key_label = row.layout().itemAt(0).widget()
+
+    assert "#123456" in key_label.styleSheet()
+    dialog.close()
+
+
+def test_app_apply_theme_uses_resolved_accent(monkeypatch) -> None:
+    from ankismart.ui import app as app_module
+
+    calls: list[tuple[str, object, bool]] = []
+    monkeypatch.setattr(app_module, "refresh_theme_accent_cache", lambda: "#123456")
+    monkeypatch.setattr(
+        app_module,
+        "setTheme",
+        lambda theme, lazy=True: calls.append(("theme", theme, lazy)),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "setThemeColor",
+        lambda color, lazy=True: calls.append(("color", color, lazy)),
+    )
+
+    app_module._apply_theme("light")
+
+    assert ("color", "#123456", True) in calls
 
 
 def test_cloze_preview_emphasizes_deletion_features() -> None:

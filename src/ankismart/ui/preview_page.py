@@ -33,6 +33,7 @@ from ankismart.ui.styles import (
     apply_page_title_style,
     get_display_scale,
     get_list_widget_palette,
+    get_theme_accent_text_hex,
     scale_px,
 )
 from ankismart.ui.task_runtime import TaskEvent
@@ -67,10 +68,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         """Setup highlighting rules for Markdown syntax based on current theme."""
         self._rules.clear()
         is_dark = isDarkTheme()
+        accent = get_theme_accent_text_hex(dark=is_dark)
 
         # Heading format
         heading_fmt = QTextCharFormat()
-        heading_fmt.setForeground(QColor("#D1D5DB" if is_dark else "#0078D4"))
+        heading_fmt.setForeground(QColor(accent))
         heading_fmt.setFontWeight(QFont.Weight.Bold)
         self._rules.append((re.compile(r"^#{1,6}\s+.*$", re.MULTILINE), heading_fmt))
 
@@ -94,7 +96,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # Link format
         link_fmt = QTextCharFormat()
-        link_fmt.setForeground(QColor("#C5CCD6" if is_dark else "#0366D6"))
+        link_fmt.setForeground(QColor(accent))
         link_fmt.setFontUnderline(True)
         self._rules.append((re.compile(r"\[([^\]]+)\]\(([^)]+)\)"), link_fmt))
 
@@ -110,7 +112,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # List format
         list_fmt = QTextCharFormat()
-        list_fmt.setForeground(QColor("#C8CFD9" if is_dark else "#005A9E"))
+        list_fmt.setForeground(QColor(accent))
         self._rules.append((re.compile(r"^[\*\-\+]\s+.*$", re.MULTILINE), list_fmt))
         self._rules.append((re.compile(r"^\d+\.\s+.*$", re.MULTILINE), list_fmt))
 
