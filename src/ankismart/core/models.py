@@ -49,6 +49,9 @@ class CardMetadata(BaseModel):
     source_format: str = ""
     source_path: str = ""
     generated_at: str = ""
+    strategy_id: str = ""
+    source_document: str = ""
+    quality_flags: list[str] = Field(default_factory=list)
 
 
 class CardDraft(BaseModel):
@@ -112,6 +115,13 @@ class GenerateRequest(BaseModel):
     auto_target_count: bool = False  # Let AI adapt count while keeping target_count as soft hint
     enable_auto_split: bool = False  # Experimental: Enable auto-split for long documents
     split_threshold: int = 70000  # Character count threshold for splitting
+
+
+class RegenerateRequest(BaseModel):
+    scope: str
+    card_indices: list[int] = Field(default_factory=list)
+    source_documents: list[str] = Field(default_factory=list)
+    strategy_ids: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

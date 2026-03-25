@@ -76,6 +76,9 @@ CONFIG_DIR: Path = _resolve_app_dir()
 CONFIG_PATH: Path = Path(
     os.getenv("ANKISMART_CONFIG_PATH", str(CONFIG_DIR / "config.yaml"))
 ).expanduser().resolve()
+TASKS_PATH: Path = Path(
+    os.getenv("ANKISMART_TASKS_PATH", str(CONFIG_DIR / "tasks.json"))
+).expanduser().resolve()
 CONFIG_BACKUP_DIR: Path = CONFIG_DIR / "backups"
 
 _ENCRYPTED_FIELDS: set[str] = {"anki_connect_key", "ocr_cloud_api_key"}
@@ -97,6 +100,43 @@ KNOWN_PROVIDERS: dict[str, str] = {
     "通义千问 (Qwen)": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "Ollama (本地)": "http://localhost:11434/v1",
 }
+
+DEFAULT_GENERATION_PRESET = "reading_general"
+GENERATION_PRESET_LIBRARY: dict[str, dict[str, object]] = {
+    "reading_general": {
+        "label_zh": "通用阅读",
+        "label_en": "General Reading",
+        "target_total": 20,
+        "auto_target_count": True,
+        "strategy_mix": {"basic": 100},
+    },
+    "exam_dense": {
+        "label_zh": "考试冲刺",
+        "label_en": "Exam Dense",
+        "target_total": 24,
+        "auto_target_count": False,
+        "strategy_mix": {
+            "single_choice": 35,
+            "multiple_choice": 25,
+            "cloze": 20,
+            "basic": 20,
+        },
+    },
+    "language_vocab": {
+        "label_zh": "词汇记忆",
+        "label_en": "Language Vocab",
+        "target_total": 18,
+        "auto_target_count": False,
+        "strategy_mix": {"cloze": 40, "key_terms": 35, "basic": 25},
+    },
+}
+
+
+def normalize_generation_preset(preset_id: str) -> str:
+    normalized = str(preset_id or "").strip()
+    if normalized in GENERATION_PRESET_LIBRARY:
+        return normalized
+    return DEFAULT_GENERATION_PRESET
 
 
 class LLMProviderConfig(BaseModel):
@@ -137,6 +177,7 @@ class AppConfig(BaseModel):
     last_tags: str = ""
     last_strategy: str = ""
     last_update_mode: str = ""
+    generation_preset: str = DEFAULT_GENERATION_PRESET
     window_geometry: str = ""  # hex-encoded QByteArray
     proxy_mode: str = "system"  # "system" | "manual" | "none"
     proxy_url: str = ""
@@ -344,6 +385,9 @@ def load_config() -> AppConfig:
             config.theme = "light"
         if config.ocr_mode not in {"local", "cloud"}:
             config.ocr_mode = "local"
+        config.generation_preset = normalize_generation_preset(
+            getattr(config, "generation_preset", DEFAULT_GENERATION_PRESET)
+        )
         if config.llm_concurrency_max < 1:
             config.llm_concurrency_max = 1
         if config.llm_concurrency < 0:

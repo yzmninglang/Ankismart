@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QHBoxLayout,
     QListWidget,
@@ -40,7 +41,8 @@ from qfluentwidgets import (
 
 from ankismart.core.config import append_task_history, record_operation_metric, save_config
 from ankismart.core.logging import get_logger
-from ankismart.core.models import CardDraft
+from ankismart.core.models import CardDraft, RegenerateRequest
+from ankismart.ui.card_preview_renderer import CARD_KIND_LABELS, CardRenderer, format_quality_flags
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.styles import (
     MARGIN_SMALL,
@@ -57,797 +59,6 @@ if TYPE_CHECKING:
     from ankismart.ui.main_window import MainWindow
 
 logger = get_logger(__name__)
-
-PREVIEW_READABILITY_CSS = """
-.card[data-card-type] {
-    font-size: 19px !important;
-    line-height: 1.95 !important;
-}
-
-.card[data-card-type] .flat-card {
-    max-width: 980px;
-    margin: 0 auto;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    background: var(--surface);
-    box-shadow: 0 8px 20px rgba(16, 39, 72, 0.12);
-    padding: 14px;
-}
-
-.night_mode .card[data-card-type] .flat-card,
-.nightMode .card[data-card-type] .flat-card {
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
-}
-
-.card[data-card-type] .flat-block {
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: #fbfdff;
-    padding: 14px;
-}
-
-.card[data-card-type] .flat-block + .flat-block {
-    margin-top: 12px;
-}
-
-.card[data-card-type] .flat-section-spacer {
-    height: 18px;
-}
-
-.card[data-card-type] .flat-answer {
-    border-color: #b7e1c7;
-    background: #f3fcf6;
-}
-
-.card[data-card-type] .flat-explain {
-    background: #f9fbff;
-}
-
-.night_mode .card[data-card-type] .flat-block,
-.nightMode .card[data-card-type] .flat-block,
-.night_mode .card[data-card-type] .flat-explain,
-.nightMode .card[data-card-type] .flat-explain {
-    background: rgba(58, 58, 58, 0.9);
-}
-
-.card[data-card-type] .flat-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    margin-bottom: 8px;
-}
-
-.card[data-card-type] .flat-content {
-    font-size: 20px;
-    line-height: 1.85;
-}
-
-.card[data-card-type] .flat-focus-line {
-    display: inline-block;
-    padding: 6px 12px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, rgba(255, 244, 214, 0.92), rgba(255, 232, 176, 0.9));
-    color: #8a4b00;
-    font-size: 22px;
-    font-weight: 800;
-    line-height: 1.65;
-}
-
-.night_mode .card[data-card-type] .flat-focus-line,
-.nightMode .card[data-card-type] .flat-focus-line {
-    background: linear-gradient(135deg, rgba(131, 92, 22, 0.88), rgba(96, 67, 18, 0.84));
-    color: #ffd980;
-}
-
-.card[data-card-type] .flat-keyword {
-    color: #a24b00;
-    font-weight: 800;
-}
-
-.night_mode .card[data-card-type] .flat-keyword,
-.nightMode .card[data-card-type] .flat-keyword {
-    color: #ffb86b;
-}
-
-.card[data-card-type] .flat-option-list {
-    margin-top: 12px;
-    display: grid;
-    gap: 8px;
-}
-
-.card[data-card-type] .flat-option-line {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: start;
-    column-gap: 10px;
-    font-size: 20px;
-    line-height: 1.85;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: rgba(36, 96, 168, 0.05);
-}
-
-.card[data-card-type] .flat-option-key {
-    font-weight: 700;
-    color: #245fa8;
-}
-
-.card[data-card-type] .flat-answer-stack {
-    display: grid;
-    gap: 10px;
-}
-
-.card[data-card-type] .flat-answer-item {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: start;
-    column-gap: 10px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    background: rgba(46, 125, 50, 0.08);
-}
-
-.card[data-card-type] .flat-answer-key {
-    font-weight: 800;
-    color: #2e7d32;
-}
-
-.card[data-card-type] .flat-answer-text {
-    font-size: 20px;
-    line-height: 1.85;
-}
-
-.card[data-card-type] .flat-answer-line {
-    font-size: 20px;
-    line-height: 1.85;
-}
-
-.card[data-card-type] .flat-explain-wrap {
-    margin-top: 6px;
-}
-
-.card[data-card-type] .flat-explain-stack {
-    margin-top: 6px;
-    display: grid;
-    gap: 8px;
-}
-
-.card[data-card-type] .flat-explain-item {
-    font-size: 20px;
-    margin: 0;
-    line-height: 1.85;
-}
-
-.card[data-card-type] .flat-content *,
-.card[data-card-type] .flat-answer-line *,
-.card[data-card-type] .flat-explain-item *,
-.card[data-card-type] .flat-option-line * {
-    font-size: inherit !important;
-    line-height: 1.85 !important;
-}
-""".strip()
-
-_CARD_KIND_LABELS = {
-    "basic": ("基础问答", "Basic Q&A"),
-    "basic_reversed": ("双向基础卡", "Reversed Basic"),
-    "cloze": ("填空题", "Cloze"),
-    "concept": ("概念解释", "Concept"),
-    "key_terms": ("关键术语", "Key Terms"),
-    "single_choice": ("单选题", "Single Choice"),
-    "multiple_choice": ("多选题", "Multiple Choice"),
-    "image_qa": ("图片问答", "Image Q&A"),
-    "generic": ("通用卡片", "Generic"),
-}
-
-
-class CardRenderer:
-    """Generates HTML for different Anki note types."""
-
-    _OPTION_LINE_PATTERN = re.compile(r"^\s*([A-Ea-e])[\.、\):：\-]\s*(.+?)\s*$")
-    _ANSWER_LINE_PATTERN = re.compile(
-        r"^(?:答案|正确答案|answer)?\s*[:：]?\s*([A-Ea-e](?:\s*[,，、/]\s*[A-Ea-e])*)\s*$",
-        re.IGNORECASE,
-    )
-    _CLOZE_PATTERN = re.compile(r"\{\{c(\d+)::(.*?)(?:::(.*?))?\}\}", re.IGNORECASE | re.DOTALL)
-
-    @staticmethod
-    def detect_card_kind(card: CardDraft) -> str:
-        """Return normalized card kind key used by UI filtering and rendering."""
-        note_type = card.note_type
-        tags = card.tags or []
-        lower_tags = {tag.lower() for tag in tags}
-        front_preview = str(card.fields.get("Front", ""))[:80]
-
-        if "concept" in lower_tags or "概念" in front_preview:
-            return "concept"
-        if "key_terms" in lower_tags or "术语" in tags:
-            return "key_terms"
-        if "single_choice" in lower_tags or "单选" in tags:
-            return "single_choice"
-        if "multiple_choice" in lower_tags or "多选" in tags:
-            return "multiple_choice"
-        if "image" in lower_tags:
-            return "image_qa"
-        if note_type == "Basic (and reversed card)":
-            return "basic_reversed"
-        if note_type.startswith("Cloze"):
-            return "cloze"
-        if note_type == "Basic":
-            return "basic"
-        return "generic"
-
-    @staticmethod
-    def render_card(card: CardDraft) -> str:
-        """Generate HTML for card preview - always show both question and answer."""
-        card_kind = CardRenderer.detect_card_kind(card)
-
-        if card_kind == "concept":
-            return CardRenderer._render_concept(card)
-        elif card_kind == "key_terms":
-            return CardRenderer._render_key_terms(card)
-        elif card_kind == "single_choice":
-            return CardRenderer._render_single_choice(card)
-        elif card_kind == "multiple_choice":
-            return CardRenderer._render_multiple_choice(card)
-        elif card_kind == "image_qa":
-            return CardRenderer._render_image_qa(card)
-        elif card_kind == "basic":
-            return CardRenderer._render_basic(card)
-        elif card_kind == "basic_reversed":
-            return CardRenderer._render_basic_reversed(card)
-        elif card_kind == "cloze":
-            return CardRenderer._render_cloze(card)
-        else:
-            return CardRenderer._render_generic(card)
-
-    @staticmethod
-    def _format_text_block(text: str, *, empty_text: str = "（空）") -> str:
-        """Format raw field text for HTML display."""
-        value = text.strip()
-        if not value:
-            return f'<span class="empty-placeholder">{empty_text}</span>'
-        return CardRenderer._highlight_keywords(value).replace("\r\n", "\n").replace("\n", "<br>")
-
-    @staticmethod
-    def _highlight_keywords(text: str) -> str:
-        highlighted_lines: list[str] = []
-        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-            line = raw_line.strip()
-            if not line:
-                highlighted_lines.append("")
-                continue
-            line = re.sub(
-                r"^(?P<label>[A-Ea-e]|C\d+)(?P<sep>[\.、\):：\-])\s*",
-                lambda match: (
-                    f'<span class="flat-keyword">{match.group("label").upper()}</span>'
-                    f'{match.group("sep")} '
-                ),
-                line,
-            )
-            line = re.sub(
-                r"^(?P<label>[^:：<>\n]{1,10})(?P<sep>[:：])\s*",
-                lambda match: (
-                    f'<span class="flat-keyword">{match.group("label").strip()}</span>'
-                    f'{match.group("sep")} '
-                ),
-                line,
-            )
-            highlighted_lines.append(line)
-        return "\n".join(highlighted_lines)
-
-    @staticmethod
-    def _render_focus_line(text: str, *, empty_text: str = "（空）") -> str:
-        value = text.strip()
-        if not value:
-            return f'<span class="empty-placeholder">{empty_text}</span>'
-        content = CardRenderer._format_text_block(value, empty_text=empty_text)
-        return f'<div class="flat-focus-line">{content}</div>'
-
-    @staticmethod
-    def _render_answer_items(items: list[tuple[str, str]], *, empty_text: str = "（空）") -> str:
-        if not items:
-            return CardRenderer._format_text_block("", empty_text=empty_text)
-        rows = "".join(
-            (
-                '<div class="flat-answer-item">'
-                f'<span class="flat-answer-key">{CardRenderer._highlight_keywords(key)}</span>'
-                f'<span class="flat-answer-text">'
-                f"{CardRenderer._format_text_block(text, empty_text=empty_text)}"
-                "</span>"
-                "</div>"
-            )
-            for key, text in items
-        )
-        return f'<div class="flat-answer-stack">{rows}</div>'
-
-    @staticmethod
-    def _extract_plain_lines(text: str) -> list[str]:
-        """Extract plain text lines from html/plain content."""
-        if not text:
-            return []
-        plain = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-        plain = re.sub(r"</p\s*>", "\n", plain, flags=re.IGNORECASE)
-        plain = re.sub(r"<[^>]+>", "", plain)
-        return [line.strip() for line in plain.splitlines() if line.strip()]
-
-    @staticmethod
-    def _strip_leading_index(text: str) -> str:
-        """Remove auto-generated leading line indexes like `1. ` before content."""
-        return re.sub(r"^\s*\d+[\.、\):：\-]\s*", "", text or "").strip()
-
-    @staticmethod
-    def _normalize_html_to_text(text: str) -> str:
-        if not text:
-            return ""
-        plain = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
-        plain = re.sub(r"</p\s*>", "\n", plain, flags=re.IGNORECASE)
-        plain = re.sub(r"<[^>]+>", " ", plain)
-        plain = plain.replace("\r", "")
-        plain = re.sub(r"\n{3,}", "\n\n", plain)
-        return plain.strip()
-
-    @staticmethod
-    def _extract_answer_keys(raw: str) -> list[str]:
-        """Extract unique answer keys in stable order."""
-        keys: list[str] = []
-        for key in re.findall(r"[A-Ea-e]", raw):
-            key = key.upper()
-            if key not in keys:
-                keys.append(key)
-        return keys
-
-    @staticmethod
-    def _parse_choice_front(front: str) -> tuple[str, list[tuple[str, str]]]:
-        """Parse question/options from front field."""
-        plain = CardRenderer._normalize_html_to_text(front)
-        lines = [line.strip() for line in plain.splitlines() if line.strip()]
-        options: list[tuple[str, str]] = []
-        question_lines: list[str] = []
-
-        for line in lines:
-            match = CardRenderer._OPTION_LINE_PATTERN.match(line)
-            if match:
-                options.append((match.group(1).upper(), match.group(2).strip()))
-            elif not options:
-                question_lines.append(line)
-
-        if not options:
-            compact = re.sub(r"\s+", " ", plain).strip()
-            inline_matches = list(re.finditer(r"(^|\s)([A-Ea-e])[\.、\):：\-]\s*", compact))
-            if len(inline_matches) >= 2:
-                question = compact[: inline_matches[0].start(2)].strip()
-                for i, match in enumerate(inline_matches):
-                    key = match.group(2).upper()
-                    start = match.end()
-                    end = (
-                        inline_matches[i + 1].start(2)
-                        if i + 1 < len(inline_matches)
-                        else len(compact)
-                    )
-                    option_text = compact[start:end].strip(" ;；")
-                    if option_text:
-                        options.append((key, option_text))
-                if options:
-                    return question, options
-
-            return plain, []
-        question = "\n".join(question_lines) if question_lines else lines[0]
-        return question, options
-
-    @staticmethod
-    def _parse_choice_back(back: str) -> tuple[list[str], str]:
-        """Parse answer keys and explanation from back field."""
-        lines = CardRenderer._extract_plain_lines(back)
-        if not lines:
-            return [], ""
-
-        first = lines[0]
-        match = CardRenderer._ANSWER_LINE_PATTERN.match(first)
-        if match:
-            return CardRenderer._extract_answer_keys(match.group(1)), "\n".join(lines[1:]).strip()
-
-        if re.fullmatch(r"[A-Ea-e](?:\s*[,，、/]\s*[A-Ea-e])*", first):
-            return CardRenderer._extract_answer_keys(first), "\n".join(lines[1:]).strip()
-
-        prefixed = re.match(
-            r"^([A-Ea-e](?:\s*[,，、/]\s*[A-Ea-e])*)(?:[\.、\):：\-]\s*|\s+)(.+)$",
-            first,
-        )
-        if prefixed:
-            keys = CardRenderer._extract_answer_keys(prefixed.group(1))
-            explanation_lines = [prefixed.group(2).strip(), *lines[1:]]
-            explanation = "\n".join(line for line in explanation_lines if line).strip()
-            return keys, explanation
-
-        whole = "\n".join(lines)
-        inline = re.search(
-            r"(?:答案|正确答案|answer)\s*[:：]?\s*([A-Ea-e](?:\s*[,，、/]\s*[A-Ea-e])*)",
-            whole,
-            re.IGNORECASE,
-        )
-        if inline:
-            keys = CardRenderer._extract_answer_keys(inline.group(1))
-            explanation = whole.replace(inline.group(0), "", 1).strip(" \n:：")
-            return keys, explanation
-
-        return [], whole
-
-    @staticmethod
-    def _split_explanation_sections(explanation: str) -> list[str]:
-        text = (explanation or "").strip()
-        if not text:
-            return []
-
-        lines = [
-            CardRenderer._strip_leading_index(line.strip())
-            for line in text.replace("\r", "").split("\n")
-            if line.strip()
-        ]
-        lines = [line for line in lines if line]
-        if lines:
-            marker_with_text = re.match(
-                r"^(?:解析|explanation)\s*[:：]\s*(.+)$", lines[0], re.IGNORECASE
-            )
-            if marker_with_text:
-                lines[0] = marker_with_text.group(1).strip()
-            while lines and re.match(
-                r"^(?:解析|explanation)\s*[:：]?\s*$", lines[0], re.IGNORECASE
-            ):
-                lines = lines[1:]
-        if len(lines) >= 2:
-            return lines
-
-        sentences = [
-            part.strip() for part in re.split(r"(?<=[。！？!?；;])\s*", lines[0]) if part.strip()
-        ]
-        if len(sentences) <= 1:
-            return lines
-
-        sections: list[str] = []
-        buffer = ""
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            if buffer and len(buffer) + len(sentence) > 44:
-                sections.append(buffer.strip())
-                buffer = sentence
-            else:
-                buffer = f"{buffer} {sentence}".strip()
-        if buffer:
-            sections.append(buffer.strip())
-        return sections
-
-    @staticmethod
-    def _parse_answer_and_explanation(raw: str) -> tuple[str, str]:
-        lines = CardRenderer._extract_plain_lines(raw)
-        if not lines:
-            return "", ""
-        lines = [CardRenderer._strip_leading_index(line) for line in lines if line.strip()]
-        lines = [line for line in lines if line]
-        if not lines:
-            return "", ""
-
-        first = lines[0]
-        answer_match = re.match(r"^(?:答案|正确答案|answer)\s*[:：]\s*(.+)$", first, re.IGNORECASE)
-        if answer_match:
-            answer = answer_match.group(1).strip()
-            remaining = lines[1:]
-        else:
-            answer = first.strip()
-            remaining = lines[1:]
-
-        if remaining:
-            marker_with_text = re.match(
-                r"^(?:解析|explanation)\s*[:：]\s*(.+)$",
-                remaining[0],
-                re.IGNORECASE,
-            )
-            marker_only = re.match(
-                r"^(?:解析|explanation)\s*[:：]?\s*$", remaining[0], re.IGNORECASE
-            )
-            if marker_with_text:
-                remaining = [marker_with_text.group(1).strip(), *remaining[1:]]
-            elif marker_only:
-                remaining = remaining[1:]
-
-        explanation = "\n".join(line for line in remaining if line).strip()
-        if not explanation:
-            sentences = [
-                part.strip() for part in re.split(r"(?<=[。！？!?；;])\s*", answer) if part.strip()
-            ]
-            if len(sentences) >= 2:
-                answer = sentences[0]
-                explanation = "\n".join(sentences[1:]).strip()
-
-        return answer, explanation
-
-    @staticmethod
-    def _render_explanation_html(explanation: str) -> str:
-        sections = CardRenderer._split_explanation_sections(explanation)
-        if not sections:
-            return (
-                '<div class="flat-explain-item">'
-                '<span class="empty-placeholder">（无解析）</span>'
-                "</div>"
-            )
-        if len(sections) == 1:
-            return (
-                '<div class="flat-explain-item">'
-                f"{CardRenderer._format_text_block(sections[0])}"
-                "</div>"
-            )
-        items = "".join(
-            (f'<div class="flat-explain-item">{CardRenderer._format_text_block(section)}</div>')
-            for section in sections
-        )
-        return f'<div class="flat-explain-stack">{items}</div>'
-
-    @staticmethod
-    def _render_three_blocks(*, question_html: str, answer_html: str, explanation: str) -> str:
-        explanation_html = CardRenderer._render_explanation_html(explanation)
-        return f"""
-        <div class="flat-card">
-            <section class="flat-block flat-question">
-                <div class="flat-title">问题</div>
-                <div class="flat-content">{question_html}</div>
-            </section>
-            <div class="flat-section-spacer"></div>
-            <section class="flat-block flat-answer">
-                <div class="flat-title">答案</div>
-                <div class="flat-answer-line">{answer_html}</div>
-            </section>
-            <div class="flat-section-spacer"></div>
-            <section class="flat-block flat-explain">
-                <div class="flat-title">解析</div>
-                <div class="flat-explain-wrap">{explanation_html}</div>
-            </section>
-        </div>
-        """
-
-    @staticmethod
-    def _render_choice_card(
-        *,
-        question: str,
-        options: list[tuple[str, str]],
-        answer_keys: list[str],
-        explanation: str,
-    ) -> str:
-        question_html = CardRenderer._format_text_block(question, empty_text="（空问题）")
-        option_rows = "".join(
-            (
-                '<div class="flat-option-line">'
-                f'<span class="flat-option-key">{key}.</span>'
-                f'<span class="flat-option-text">{CardRenderer._format_text_block(text)}</span>'
-                "</div>"
-            )
-            for key, text in options
-        )
-        options_html = f'<div class="flat-option-list">{option_rows}</div>' if option_rows else ""
-        question_block_html = f"{question_html}{options_html}"
-
-        option_map = {key.upper(): text for key, text in options}
-        answer_items = [
-            (key, option_map.get(key.upper(), "（未标注选项内容）"))
-            for key in answer_keys
-        ]
-        answer_html = CardRenderer._render_answer_items(answer_items, empty_text="（未标注）")
-        return CardRenderer._render_three_blocks(
-            question_html=question_block_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-
-    @staticmethod
-    def _render_basic(card: CardDraft) -> str:
-        """Render Basic note type as question/answer/explanation."""
-        question_html = CardRenderer._format_text_block(card.fields.get("Front", ""))
-        answer_raw = card.fields.get("Back", "")
-        answer_text, explanation = CardRenderer._parse_answer_and_explanation(answer_raw)
-        if not answer_text:
-            answer_text = CardRenderer._normalize_html_to_text(answer_raw)
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（空）")
-        content = CardRenderer._render_three_blocks(
-            question_html=question_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "basic")
-
-    @staticmethod
-    def _render_basic_reversed(card: CardDraft) -> str:
-        """Render reversed basic cards with same visual style as basic cards."""
-        return CardRenderer._render_basic(card)
-
-    @staticmethod
-    def _render_cloze(card: CardDraft) -> str:
-        """Render Cloze note type as question/answer/explanation."""
-        text = card.fields.get("Text", "")
-        cloze_entries: list[tuple[str, str, str]] = []
-
-        def _replace_cloze(match: re.Match[str]) -> str:
-            idx = match.group(1)
-            answer = (match.group(2) or "").strip()
-            hint = (match.group(3) or "").strip()
-            cloze_entries.append((idx, answer, hint))
-            return f"[C{idx}: ____]"
-
-        question_plain = CardRenderer._CLOZE_PATTERN.sub(_replace_cloze, text)
-        question_html = CardRenderer._format_text_block(question_plain, empty_text="（无填空内容）")
-
-        if cloze_entries:
-            answer_items = []
-            for idx, answer, hint in cloze_entries:
-                text = answer or "（空）"
-                if hint:
-                    text = f"{text}\n提示：{hint}"
-                answer_items.append((f"C{idx}", text))
-        else:
-            answer_items = []
-
-        answer_html = CardRenderer._render_answer_items(
-            answer_items,
-            empty_text="（未检测到有效填空标记）",
-        )
-        explanation = CardRenderer._normalize_html_to_text(card.fields.get("Extra", ""))
-        content = CardRenderer._render_three_blocks(
-            question_html=question_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "cloze")
-
-    @staticmethod
-    def _render_concept(card: CardDraft) -> str:
-        """Render concept cards as question/answer/explanation."""
-        question_html = CardRenderer._render_focus_line(
-            card.fields.get("Front", ""),
-            empty_text="（空问题）",
-        )
-        back_raw = card.fields.get("Back", "")
-        answer_text, explanation = CardRenderer._parse_answer_and_explanation(back_raw)
-        if not answer_text:
-            answer_text = CardRenderer._normalize_html_to_text(back_raw)
-        answer_html = CardRenderer._render_answer_items(
-            [("概念要点", answer_text)],
-            empty_text="（空）",
-        )
-        content = CardRenderer._render_three_blocks(
-            question_html=question_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "concept")
-
-    @staticmethod
-    def _render_key_terms(card: CardDraft) -> str:
-        """Render key term cards as question/answer/explanation."""
-        question_html = CardRenderer._render_focus_line(
-            card.fields.get("Front", ""),
-            empty_text="（空问题）",
-        )
-        back_raw = card.fields.get("Back", "")
-        answer_text, explanation = CardRenderer._parse_answer_and_explanation(back_raw)
-        if not answer_text:
-            answer_text = CardRenderer._normalize_html_to_text(back_raw)
-        answer_html = CardRenderer._render_answer_items(
-            [("术语要点", answer_text)],
-            empty_text="（空）",
-        )
-        content = CardRenderer._render_three_blocks(
-            question_html=question_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "keyterm")
-
-    @staticmethod
-    def _render_single_choice(card: CardDraft) -> str:
-        """Render single choice question cards."""
-        question, options = CardRenderer._parse_choice_front(card.fields.get("Front", ""))
-        keys, explanation = CardRenderer._parse_choice_back(card.fields.get("Back", ""))
-        if keys:
-            keys = keys[:1]
-
-        content = CardRenderer._render_choice_card(
-            question=question,
-            options=options,
-            answer_keys=keys,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "choice")
-
-    @staticmethod
-    def _render_multiple_choice(card: CardDraft) -> str:
-        """Render multiple choice question cards."""
-        question, options = CardRenderer._parse_choice_front(card.fields.get("Front", ""))
-        keys, explanation = CardRenderer._parse_choice_back(card.fields.get("Back", ""))
-
-        content = CardRenderer._render_choice_card(
-            question=question,
-            options=options,
-            answer_keys=keys,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "choice")
-
-    @staticmethod
-    def _render_image_qa(card: CardDraft) -> str:
-        """Render image Q&A cards as question/answer/explanation."""
-        question_html = CardRenderer._format_text_block(card.fields.get("Front", ""))
-        back_raw = card.fields.get("Back", "")
-        answer_text, explanation = CardRenderer._parse_answer_and_explanation(back_raw)
-        if not answer_text:
-            answer_text = CardRenderer._normalize_html_to_text(back_raw)
-        answer_html = CardRenderer._format_text_block(answer_text, empty_text="（空）")
-        content = CardRenderer._render_three_blocks(
-            question_html=question_html,
-            answer_html=answer_html,
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "image")
-
-    @staticmethod
-    def _render_generic(card: CardDraft) -> str:
-        """Render unknown note types using unified question/answer/explanation layout."""
-        question_source = ""
-        for key in ("Front", "Question", "Text"):
-            value = (card.fields.get(key, "") or "").strip()
-            if value:
-                question_source = value
-                break
-        if not question_source and card.fields:
-            question_source = next(iter(card.fields.values()))
-
-        answer_source = ""
-        for key in ("Back", "Answer", "Extra"):
-            value = (card.fields.get(key, "") or "").strip()
-            if value:
-                answer_source = value
-                break
-        if not answer_source:
-            leftovers = [
-                value
-                for key, value in card.fields.items()
-                if key not in {"Front", "Question", "Text"} and str(value).strip()
-            ]
-            answer_source = "\n".join(str(value) for value in leftovers).strip()
-
-        answer_text, explanation = CardRenderer._parse_answer_and_explanation(answer_source)
-        if not answer_text:
-            answer_text = CardRenderer._normalize_html_to_text(answer_source)
-
-        content = CardRenderer._render_three_blocks(
-            question_html=CardRenderer._format_text_block(question_source, empty_text="（空问题）"),
-            answer_html=CardRenderer._format_text_block(answer_text, empty_text="（空）"),
-            explanation=explanation,
-        )
-        return CardRenderer._wrap_html(content, "generic")
-
-    @staticmethod
-    def _wrap_html(content: str, card_type: str = "basic") -> str:
-        """Wrap content with CSS and card structure."""
-        from ankismart.anki_gateway.styling import MODERN_CARD_CSS, PREVIEW_CARD_EXTRA_CSS
-
-        # Keep both class names for compatibility with historical CSS selectors.
-        body_class = "night_mode nightMode" if isDarkTheme() else ""
-
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-            {MODERN_CARD_CSS}
-            {PREVIEW_CARD_EXTRA_CSS}
-            {PREVIEW_READABILITY_CSS}
-            </style>
-        </head>
-        <body class="{body_class}">
-            <div class="card" data-card-type="{card_type}">{content}</div>
-        </body>
-        </html>
-        """
 
 
 class CardPreviewPage(QWidget):
@@ -1001,6 +212,7 @@ class CardPreviewPage(QWidget):
 
         # Card list
         self._card_list = QListWidget()
+        self._card_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._card_list.currentRowChanged.connect(self._on_card_selected)
         layout.addWidget(self._card_list, 1)
 
@@ -1067,6 +279,24 @@ class CardPreviewPage(QWidget):
         self._btn_next.setEnabled(False)
         layout.addWidget(self._btn_next)
 
+        self._btn_regenerate_current = PushButton(
+            "重生成当前卡" if self._main.config.language == "zh" else "Regenerate Current"
+        )
+        self._btn_regenerate_current.clicked.connect(self._regenerate_current_card)
+        layout.addWidget(self._btn_regenerate_current)
+
+        self._btn_regenerate_selected = PushButton(
+            "重生成所选" if self._main.config.language == "zh" else "Regenerate Selected"
+        )
+        self._btn_regenerate_selected.clicked.connect(self._regenerate_selected_cards)
+        layout.addWidget(self._btn_regenerate_selected)
+
+        self._btn_regenerate_source = PushButton(
+            "重生成来源文档" if self._main.config.language == "zh" else "Regenerate Source"
+        )
+        self._btn_regenerate_source.clicked.connect(self._regenerate_source_document)
+        layout.addWidget(self._btn_regenerate_source)
+
         self._btn_export_apkg = PushButton(
             "导出为 APKG" if self._main.config.language == "zh" else "Export as APKG"
         )
@@ -1116,15 +346,24 @@ class CardPreviewPage(QWidget):
             return
 
         card_kind = CardRenderer.detect_card_kind(card)
-        kind_zh, kind_en = _CARD_KIND_LABELS.get(card_kind, _CARD_KIND_LABELS["generic"])
+        kind_zh, kind_en = CARD_KIND_LABELS.get(card_kind, CARD_KIND_LABELS["generic"])
         kind_text = kind_zh if is_zh else kind_en
         deck_name = card.deck_name or "-"
         tags_text = self._format_tags_summary(card.tags)
         quality_score = self._compute_card_quality_score(card)
+        quality_flags = list(getattr(card.metadata, "quality_flags", []) or [])
+        quality_suffix = ""
+        if quality_flags:
+            quality_text = format_quality_flags(quality_flags, "zh" if is_zh else "en")
+            quality_suffix = (
+                f"  风险: {quality_text}"
+                if is_zh
+                else f"  Flags: {quality_text}"
+            )
         self._note_type_label.setText(
-            f"类型: {kind_text}  质量: {quality_score}"
+            f"类型: {kind_text}  质量: {quality_score}{quality_suffix}"
             if is_zh
-            else f"Type: {kind_text}  Quality: {quality_score}"
+            else f"Type: {kind_text}  Quality: {quality_score}{quality_suffix}"
         )
         self._deck_label.setText(f"牌组: {deck_name}" if is_zh else f"Deck: {deck_name}")
         self._tags_label.setText(f"标签: {tags_text}" if is_zh else f"Tags: {tags_text}")
@@ -1164,7 +403,12 @@ class CardPreviewPage(QWidget):
             ]
 
         if self._quality_low_only:
-            filtered = [c for c in filtered if self._compute_card_quality_score(c) < 60]
+            filtered = [
+                c
+                for c in filtered
+                if (getattr(c.metadata, "quality_flags", None) or [])
+                or self._compute_card_quality_score(c) < 60
+            ]
 
         if self._duplicate_risk_only:
             filtered = [c for c in filtered if self._is_duplicate_risk_card(c)]
@@ -1233,6 +477,8 @@ class CardPreviewPage(QWidget):
             and question == answer
         ):
             score -= 35
+        if getattr(card.metadata, "quality_flags", None):
+            score = min(score, 55)
         return max(0, min(100, score))
 
     def _update_quality_overview(self) -> None:
@@ -1284,12 +530,13 @@ class CardPreviewPage(QWidget):
     def _build_card_list_item_text(self, card: CardDraft) -> str:
         question = self._get_card_question_text(card)
         badges: list[str] = []
-        if self._compute_card_quality_score(card) < 60:
+        if (
+            getattr(card.metadata, "quality_flags", None)
+            or self._compute_card_quality_score(card) < 60
+        ):
             badges.append("[低分]" if self._main.config.language == "zh" else "[Low]")
         if self._is_duplicate_risk_card(card):
-            badges.append(
-                "[近重复]" if self._main.config.language == "zh" else "[Near Duplicate]"
-            )
+            badges.append("[近重复]" if self._main.config.language == "zh" else "[Near Duplicate]")
         if not badges:
             return question
         return f"{question} {' '.join(badges)}"
@@ -1532,11 +779,7 @@ class CardPreviewPage(QWidget):
             self._main.config,
             event="batch_push",
             status="success" if failed == 0 else "partial",
-            summary=(
-                "推送成功 "
-                f"{succeeded} 张，"
-                f"失败 {failed} 张"
-            ),
+            summary=(f"推送成功 {succeeded} 张，失败 {failed} 张"),
             payload={
                 "cards_total": len(self._all_cards),
                 "cards_succeeded": succeeded,
@@ -1841,6 +1084,75 @@ class CardPreviewPage(QWidget):
         self._btn_push.setEnabled(enabled)
         self._btn_export_apkg.setEnabled(enabled)
         self._btn_export_csv.setEnabled(enabled)
+        self._btn_regenerate_current.setEnabled(enabled)
+        self._btn_regenerate_selected.setEnabled(enabled)
+        self._btn_regenerate_source.setEnabled(enabled)
+
+    def _selected_filtered_indices(self) -> list[int]:
+        selected_rows = sorted(index.row() for index in self._card_list.selectedIndexes())
+        if selected_rows:
+            return selected_rows
+        if 0 <= self._current_index < len(self._filtered_cards):
+            return [self._current_index]
+        return []
+
+    def _build_regenerate_request(self, scope: str, indices: list[int]) -> RegenerateRequest | None:
+        cards = [
+            self._filtered_cards[index]
+            for index in indices
+            if 0 <= index < len(self._filtered_cards)
+        ]
+        if not cards:
+            return None
+
+        source_documents: list[str] = []
+        strategy_ids: list[str] = []
+        for card in cards:
+            source_document = str(getattr(card.metadata, "source_document", "") or "").strip()
+            strategy_id = str(getattr(card.metadata, "strategy_id", "") or "").strip()
+            if source_document and source_document not in source_documents:
+                source_documents.append(source_document)
+            if strategy_id and strategy_id not in strategy_ids:
+                strategy_ids.append(strategy_id)
+
+        return RegenerateRequest(
+            scope=scope,
+            card_indices=indices,
+            source_documents=source_documents,
+            strategy_ids=strategy_ids,
+        )
+
+    def _dispatch_regenerate_request(self, request: RegenerateRequest) -> None:
+        switch = getattr(self._main, "switch_to_preview", None)
+        if callable(switch):
+            switch()
+        preview_page = getattr(self._main, "preview_page", None)
+        starter = getattr(preview_page, "start_regenerate_request", None)
+        if callable(starter):
+            starter(request)
+
+    def _regenerate_current_card(self) -> None:
+        if not (0 <= self._current_index < len(self._filtered_cards)):
+            return
+        request = self._build_regenerate_request("current_card", [self._current_index])
+        if request is not None:
+            self._dispatch_regenerate_request(request)
+
+    def _regenerate_selected_cards(self) -> None:
+        request = self._build_regenerate_request(
+            "selected_cards",
+            self._selected_filtered_indices(),
+        )
+        if request is not None:
+            self._dispatch_regenerate_request(request)
+
+    def _regenerate_source_document(self) -> None:
+        request = self._build_regenerate_request(
+            "source_document",
+            self._selected_filtered_indices(),
+        )
+        if request is not None:
+            self._dispatch_regenerate_request(request)
 
     def _build_export_rows(self) -> tuple[list[str], list[dict[str, str]]]:
         rows: list[dict[str, str]] = []
@@ -1857,6 +1169,9 @@ class CardPreviewPage(QWidget):
             "trace_id",
             "source_format",
             "source_path",
+            "source_document",
+            "strategy_id",
+            "quality_flags",
             *[f"field_{name}" for name in ordered_field_keys],
         ]
 
@@ -1869,6 +1184,9 @@ class CardPreviewPage(QWidget):
                 "trace_id": card.trace_id or "",
                 "source_format": card.metadata.source_format or "",
                 "source_path": card.metadata.source_path or "",
+                "source_document": card.metadata.source_document or "",
+                "strategy_id": card.metadata.strategy_id or "",
+                "quality_flags": ",".join(card.metadata.quality_flags or []),
             }
             for key in ordered_field_keys:
                 row[f"field_{key}"] = str(card.fields.get(key, "") or "")
@@ -2128,8 +1446,7 @@ class CardPreviewPage(QWidget):
         deck_counter = Counter((card.deck_name or "Default") for card in self._all_cards)
         top_decks = sorted(deck_counter.items(), key=lambda item: item[1], reverse=True)[:5]
         mode = (
-            getattr(self._main.config, "last_update_mode", "create_or_update")
-            or "create_or_update"
+            getattr(self._main.config, "last_update_mode", "create_or_update") or "create_or_update"
         )
 
         lines: list[str] = []

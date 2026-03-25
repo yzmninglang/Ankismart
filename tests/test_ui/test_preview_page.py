@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from PyQt6.QtWidgets import QApplication, QLabel
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QApplication
 from pytest import mark
 
 from ankismart.core.models import (
     BatchConvertResult,
     ConvertedDocument,
     MarkdownResult,
+    RegenerateRequest,
 )
 from ankismart.ui.preview_page import MarkdownHighlighter, PreviewPage
 
@@ -259,6 +262,22 @@ class TestMarkdownHighlighter:
         for pattern, fmt in hl._rules:
             assert hasattr(pattern, "finditer")
 
+    def test_highlighter_uses_theme_accent_for_heading_link_and_list(self, monkeypatch):
+        monkeypatch.setattr("ankismart.ui.preview_page.isDarkTheme", lambda: False)
+        monkeypatch.setattr(
+            "ankismart.ui.preview_page.get_theme_accent_text_hex",
+            lambda **_: "#123456",
+        )
+        hl = MarkdownHighlighter()
+        color_by_pattern = {
+            pattern.pattern: fmt.foreground().color().name()
+            for pattern, fmt in hl._rules
+        }
+
+        assert color_by_pattern[r"^#{1,6}\s+.*$"] == "#123456"
+        assert color_by_pattern[r"\[([^\]]+)\]\(([^)]+)\)"] == "#123456"
+        assert color_by_pattern[r"^[\*\-\+]\s+.*$"] == "#123456"
+
 
 class TestPreviewPageFlow:
     def test_push_finished_does_not_auto_navigate(self):
@@ -439,14 +458,14 @@ def test_generation_message_wraps_long_text():
     assert len(text) < 220
 
 
-def test_push_card_progress_updates_state_tooltip(monkeypatch):
+def test_push_card_progress_updates_progress_infobar(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"
     page = PreviewPage(main)
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         page,
-        "_show_state_tooltip",
+        "_show_progress_info_bar",
         lambda title, content: calls.append((title, content)),
     )
 
@@ -481,86 +500,121 @@ def test_generation_warning_shows_visible_infobar(monkeypatch):
     assert "超时" in warnings[0]["content"]
 
 
-def test_show_state_tooltip_applies_adaptive_max_width(monkeypatch):
+def test_update_converting_status_shows_top_infobar(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"
     page = PreviewPage(main)
+    page._ready_documents = []
+    page._total_expected_docs = 3
+    warning_calls: list[dict] = []
 
-    class _TooltipStub:
-        def __init__(self, title, content, parent):
-            self.title = title
-            self.content = content
-            self.parent = parent
-            self.max_width = None
-            self.min_width = None
-            self.min_height = None
-            self.position = None
-            self.shown = False
-            self.used_suitable_pos = False
-            self.titleLabel = QLabel(title)
-            self.contentLabel = QLabel(content)
+    monkeypatch.setattr(
+        "ankismart.ui.preview_page.InfoBar.warning",
+        lambda *args, **kwargs: warning_calls.append(kwargs) or object(),
+    )
 
-        def setMaximumWidth(self, width):
-            self.max_width = width
+    page.update_converting_status(2)
 
-        def setMinimumWidth(self, width):
-            self.min_width = width
+    assert len(warning_calls) == 1
+    assert page._btn_generate.isEnabled() is False
 
-        def setMinimumHeight(self, height):
-            self.min_height = height
 
-        def adjustSize(self):
-            return None
-
-        def move(self, pos):
-            self.position = (pos.x(), pos.y())
-
-        def getSuitablePos(self):
-            self.used_suitable_pos = True
-            return object()
-
-        def sizeHint(self):
-            class _SizeHint:
-                def width(self):
-                    return 420
-
-                def height(self):
-                    return 84
-
-            return _SizeHint()
-
-        def show(self):
-            self.shown = True
-
-        def setContent(self, content):
-            self.content = content
-            self.contentLabel.setText(content)
-
-    monkeypatch.setattr("ankismart.ui.preview_page.StateToolTip", _TooltipStub)
-
-    page.resize(1200, 800)
-    page._show_state_tooltip("正在生成卡片", "这是一个非常长的提示内容" * 8)
-
-    tooltip = page._state_tooltip
-    assert tooltip is not None
-    assert tooltip.max_width == 820
-    assert tooltip.min_width == 520
-    assert tooltip.min_height == 132
-    assert tooltip.contentLabel.wordWrap() is True
-    assert tooltip.position == (624, 36)
-    assert tooltip.used_suitable_pos is False
-    assert tooltip.shown is True
-
-def test_sample_error_marks_state_tooltip_failed(monkeypatch):
+def test_preview_sample_uses_progress_infobar_not_state_tooltip(monkeypatch):
     main = _make_main_window()
     main.config.language = "zh"
+    main.config.active_provider = SimpleNamespace(
+        api_key="key",
+        base_url="https://api.test",
+        model="demo-model",
+        rpm_limit=60,
+    )
+    main.import_page.build_generation_config.return_value = {
+        "strategy_mix": [{"strategy": "basic", "ratio": 100}]
+    }
     page = PreviewPage(main)
-    calls: list[tuple[bool, str]] = []
+    page._documents = [_make_doc("a.md", "# A")]
+    calls: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         page,
-        "_finish_state_tooltip",
-        lambda success, content: calls.append((success, content)),
+        "_show_progress_info_bar",
+        lambda title, content, duration=1800: calls.append((title, content)),
+    )
+    monkeypatch.setattr(page, "_cleanup_sample_worker", lambda: None)
+    monkeypatch.setattr(page, "_set_sample_preview_enabled", lambda enabled: None)
+    monkeypatch.setattr("PyQt6.QtCore.QThread.start", lambda self: None)
+    monkeypatch.setattr("ankismart.card_gen.llm_client.LLMClient", lambda **kwargs: object())
+
+    page._on_preview_sample()
+
+    assert not hasattr(page, "_show_state_tooltip")
+    assert calls == [("正在生成样本卡片", "正在调用模型，请稍候")]
+
+
+def test_preview_page_removes_state_tooltip_popup_api():
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+
+    assert not hasattr(page, "_show_state_tooltip")
+    assert not hasattr(page, "_finish_state_tooltip")
+
+
+def test_generation_warning_publishes_task_warning(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+    events = []
+
+    monkeypatch.setattr(
+        "ankismart.ui.preview_page.InfoBar",
+        type(
+            "_InfoBarStub",
+            (),
+            {
+                "warning": staticmethod(lambda *args, **kwargs: None),
+                "success": staticmethod(lambda *args, **kwargs: None),
+                "info": staticmethod(lambda *args, **kwargs: None),
+                "error": staticmethod(lambda *args, **kwargs: None),
+            },
+        ),
+    )
+    monkeypatch.setattr(page, "_publish_task_event", lambda event: events.append(event))
+
+    page._current_task_id = "task-preview"
+    page._on_generation_warning("partial result")
+
+    assert events[-1].kind == "warning"
+    assert events[-1].stage == "generate"
+
+
+def test_build_documents_filters_pending_regenerate_source_documents():
+    main = _make_main_window()
+    page = PreviewPage(main)
+    page._documents = [
+        _make_doc("a.md", "# A"),
+        _make_doc("b.md", "# B"),
+    ]
+    page._pending_regenerate_request = RegenerateRequest(
+        scope="source_document",
+        source_documents=["b.md"],
+    )
+
+    docs = page._build_documents()
+
+    assert [doc.file_name for doc in docs] == ["b.md"]
+
+
+def test_sample_error_clears_progress_infobar(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+    calls = {"cleared": 0}
+
+    monkeypatch.setattr(
+        page,
+        "_clear_progress_info_bar",
+        lambda: calls.__setitem__("cleared", calls["cleared"] + 1),
     )
     monkeypatch.setattr(
         "ankismart.ui.preview_page.build_error_display",
@@ -570,4 +624,48 @@ def test_sample_error_marks_state_tooltip_failed(monkeypatch):
 
     page._on_sample_error("boom")
 
-    assert calls == [(False, "样本卡片生成失败")]
+    assert calls["cleared"] == 1
+
+
+def test_load_documents_skips_converting_infobar_when_pending_progress_count_is_zero(monkeypatch):
+    main = _make_main_window()
+    main.config.language = "zh"
+    page = PreviewPage(main)
+    batch = _make_batch(_make_doc("a.md", "# A"))
+    show_calls: list[int] = []
+
+    monkeypatch.setattr(
+        page,
+        "_show_converting_info_bar",
+        lambda pending: show_calls.append(pending),
+    )
+
+    page.load_documents(batch, pending_files_count=0, total_expected=2)
+
+    assert show_calls == []
+    assert page._btn_generate.isEnabled() is False
+
+
+def test_close_event_clears_progress_infobars():
+    main = _make_main_window()
+    page = PreviewPage(main)
+    progress_closed = {"value": False}
+    converting_closed = {"value": False}
+
+    page._progress_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: progress_closed.__setitem__("value", True)},
+    )()
+    page._converting_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: converting_closed.__setitem__("value", True)},
+    )()
+
+    page.closeEvent(QCloseEvent())
+
+    assert progress_closed["value"] is True
+    assert converting_closed["value"] is True
+    assert page._progress_info_bar is None
+    assert page._converting_info_bar is None

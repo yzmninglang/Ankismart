@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QMessageBox
+import pytest
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ankismart.core.config import AppConfig, LLMProviderConfig
-from ankismart.ui.settings_page import SettingsPage
+from ankismart.ui.settings_page import LLMProviderDialog, SettingsPage
 
 from .settings_page_test_utils import make_main
 
-pytest_plugins = ["tests.test_ui.settings_page_test_utils"]
+
+@pytest.fixture(scope="session", name="_qapp")
+def _qapp_fixture():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 def test_temperature_load_and_save_uses_slider(_qapp, monkeypatch) -> None:
@@ -70,6 +77,25 @@ def test_load_config_populates_ocr_controls(_qapp) -> None:
     assert page._ocr_source_combo.currentData() == "cn_mirror"
     assert page._ocr_cuda_auto_card.isChecked() is False
     assert page._ocr_cloud_limit_card.isHidden() is False
+
+
+def test_load_config_populates_generation_preset(_qapp) -> None:
+    provider = LLMProviderConfig(
+        id="p1",
+        name="OpenAI",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        model="gpt-4o",
+    )
+    cfg = AppConfig(
+        llm_providers=[provider],
+        active_provider_id="p1",
+        generation_preset="exam_dense",
+    )
+    main, _ = make_main(cfg)
+    page = SettingsPage(main)
+
+    assert page._generation_preset_combo.currentData() == "exam_dense"
 
 
 def test_ocr_cloud_limit_card_visibility_follows_mode(_qapp) -> None:
@@ -241,8 +267,31 @@ def test_save_config_prefers_runtime_apply_when_available(_qapp, monkeypatch) ->
     assert applied["config"].language == "en"
 
 
+def test_provider_dialog_required_name_uses_non_blocking_infobar(_qapp, monkeypatch) -> None:
+    dialog = LLMProviderDialog(language="zh")
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        "ankismart.ui.settings_page.InfoBar.warning",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected modal warning")),
+    )
+
+    dialog._name_edit.setText("   ")
+    dialog._save()
+
+    assert len(calls) == 1
+    assert calls[0][1]["content"] == "提供商名称为必填项"
+
+
 def test_save_config_persists_non_llm_settings_without_providers(_qapp, monkeypatch) -> None:
-    cfg = AppConfig(llm_providers=[], active_provider_id="", anki_connect_url="http://127.0.0.1:8765")
+    cfg = AppConfig(
+        llm_providers=[], active_provider_id="", anki_connect_url="http://127.0.0.1:8765"
+    )
     main, _ = make_main(cfg)
     page = SettingsPage(main)
 
@@ -280,6 +329,48 @@ def test_parse_version_tuple_ignores_non_numeric_suffix(_qapp) -> None:
     assert page._parse_version_tuple("2.4.beta") == (2, 4, 0)
 
 
+def test_delete_provider_uses_infobar_when_last_provider(_qapp, monkeypatch) -> None:
+    main, _ = make_main()
+    page = SettingsPage(main)
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        page, "_show_info_bar", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())
+    )
+
+    page._delete_provider(page._providers[0])
+
+    assert len(calls) == 1
+    assert calls[0][0][0] == "warning"
+
+
+def test_save_config_failure_uses_error_infobar(_qapp, monkeypatch) -> None:
+    main, _ = make_main()
+    page = SettingsPage(main)
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        main,
+        "apply_runtime_config",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("disk full")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        page, "_show_info_bar", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError())
+    )
+
+    page._save_config_silent(show_feedback=True)
+
+    assert len(calls) == 1
+    assert calls[0][0][0] == "error"
+
+
 def test_save_config_persists_adaptive_concurrency_and_update_flags(_qapp, monkeypatch) -> None:
     main, _ = make_main()
     page = SettingsPage(main)
@@ -307,6 +398,33 @@ def test_save_config_persists_adaptive_concurrency_and_update_flags(_qapp, monke
     assert captured["cfg"].llm_concurrency_max == 4
     assert captured["cfg"].llm_adaptive_concurrency is False
     assert captured["cfg"].auto_check_updates is False
+
+
+def test_save_config_persists_generation_preset(_qapp, monkeypatch) -> None:
+    main, _ = make_main()
+    page = SettingsPage(main)
+
+    captured: dict[str, AppConfig] = {}
+    monkeypatch.setattr(
+        "ankismart.ui.settings_page.save_config", lambda c: captured.setdefault("cfg", c)
+    )
+    monkeypatch.setattr("ankismart.ui.settings_page.configure_ocr_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+
+    for index in range(page._generation_preset_combo.count()):
+        if page._generation_preset_combo.itemData(index) == "language_vocab":
+            page._generation_preset_combo.setCurrentIndex(index)
+            break
+
+    page._save_config()
+
+    assert "cfg" in captured
+    assert captured["cfg"].generation_preset == "language_vocab"
 
 
 def test_settings_page_uses_llm_group_as_top_content(_qapp) -> None:
@@ -338,6 +456,11 @@ def test_settings_page_uses_llm_group_as_top_content(_qapp) -> None:
 def test_clear_cache_confirmation_dialog_uses_custom_clean_styles(_qapp, monkeypatch) -> None:
     main, _ = make_main()
     page = SettingsPage(main)
+    monkeypatch.setattr("ankismart.ui.settings_page.get_theme_accent_hex", lambda: "#123456")
+    monkeypatch.setattr(
+        "ankismart.ui.settings_page.get_theme_accent_hover_hex",
+        lambda **_: "#0f2e4d",
+    )
 
     monkeypatch.setattr(
         "ankismart.converter.cache.get_cache_stats",
@@ -367,6 +490,8 @@ def test_clear_cache_confirmation_dialog_uses_custom_clean_styles(_qapp, monkeyp
     assert "border-radius: 14px" in style
     assert "#clearCacheConfirmButton" in style
     assert "#clearCacheCancelButton" in style
+    assert "#123456" in style
+    assert "#0f2e4d" in style
     assert "min-width: 108px" in style
     assert "min-height: 40px" in style
 

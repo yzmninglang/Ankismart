@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QUrl
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ankismart.core.config import AppConfig, LLMProviderConfig
 from ankismart.ui.error_handler import ErrorCategory, ErrorHandler, build_error_display
@@ -12,7 +12,13 @@ from ankismart.ui.settings_page import SettingsPage, configure_ocr_runtime
 
 from .settings_page_test_utils import make_main
 
-pytest_plugins = ["tests.test_ui.settings_page_test_utils"]
+
+@pytest.fixture(scope="session", name="_qapp")
+def _qapp_fixture():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 class _SignalStub:
@@ -399,9 +405,7 @@ def test_error_handler_maps_cloud_ocr_file_size_limit_code() -> None:
 def test_error_handler_maps_cloud_ocr_page_limit_code() -> None:
     handler = ErrorHandler(language="zh")
 
-    info = handler.classify_error(
-        "[E_CONFIG_INVALID] Cloud OCR PDF pages exceed 600-page limit"
-    )
+    info = handler.classify_error("[E_CONFIG_INVALID] Cloud OCR PDF pages exceed 600-page limit")
 
     assert info.category == ErrorCategory.FILE_FORMAT
     assert "600" in info.message
@@ -419,6 +423,26 @@ def test_build_error_display_keeps_unknown_error_detail() -> None:
 
     assert display["title"] == "Unknown Error"
     assert "export failed badly" in display["content"]
+
+
+def test_error_handler_show_error_prefers_infobar_by_default(_qapp, monkeypatch) -> None:
+    handler = ErrorHandler(language="zh")
+    calls = {"infobar": 0, "messagebox": 0}
+
+    monkeypatch.setattr(
+        handler,
+        "_show_infobar",
+        lambda parent, error_info: calls.__setitem__("infobar", calls["infobar"] + 1),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_show_messagebox",
+        lambda parent, error_info: calls.__setitem__("messagebox", calls["messagebox"] + 1),
+    )
+
+    handler.show_error(SettingsPage.__new__(SettingsPage), "[E_CONFIG_INVALID] invalid api key")
+
+    assert calls == {"infobar": 1, "messagebox": 0}
 
 
 def test_check_for_updates_failure_updates_metadata_and_warns(_qapp, monkeypatch) -> None:

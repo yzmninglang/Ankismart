@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlparse
 import genanki
 import httpx
 
+from ankismart.card_gen.card_pipeline import normalize_card_draft, validate_card_for_output
 from ankismart.core.errors import AnkiGatewayError, ErrorCode
 from ankismart.core.logging import get_logger
 from ankismart.core.models import CardDraft, MediaItem
@@ -24,289 +25,6 @@ logger = get_logger("anki_gateway.apkg_exporter")
 ANKISMART_BASIC_MODEL = "AnkiSmart Basic"
 ANKISMART_CLOZE_MODEL = "AnkiSmart Cloze"
 
-_CHOICE_FORMATTER_SCRIPT = """
-<script>
-(function () {
-  function escapeHtml(text) {
-    return String(text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function toText(html) {
-    return String(html || "")
-      .replace(/<br\\s*\\/?>/gi, "\\n")
-      .replace(/<\\/p\\s*>/gi, "\\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\\u00a0/g, " ")
-      .replace(/\\r/g, "")
-      .trim();
-  }
-
-  function formatWithBreaks(text) {
-    var raw = String(text || "");
-    if (!raw) {
-      return "";
-    }
-
-    var mathRe = new RegExp(
-      "(\\\\$\\\\$[\\\\s\\\\S]*?\\\\$\\\\$|\\\\\\\\\\\\[[\\\\s\\\\S]*?\\\\\\\\\\\\]|" +
-      "\\\\\\\\\\([\\\\s\\\\S]*?\\\\\\\\\\\\)|\\\\\\\\begin\\\\{[a-zA-Z*]+\\\\}[\\\\s\\\\S]*?" +
-      "\\\\\\\\end\\\\{[a-zA-Z*]+\\\\}|\\\\$[^$\\\\n]+\\\\$)",
-      "g"
-    );
-    var output = "";
-    var lastIndex = 0;
-    var match;
-    while ((match = mathRe.exec(raw)) !== null) {
-      output += escapeHtml(raw.slice(lastIndex, match.index)).replace(/\\n/g, "<br>");
-      output += escapeHtml(match[0]);
-      lastIndex = mathRe.lastIndex;
-    }
-    output += escapeHtml(raw.slice(lastIndex)).replace(/\\n/g, "<br>");
-    return output;
-  }
-
-  function containsLatex(text) {
-    var latexRe = new RegExp(
-      "(\\\\$\\\\$[\\\\s\\\\S]*?\\\\$\\\\$|\\\\\\\\\\\\[[\\\\s\\\\S]*?\\\\\\\\\\\\]|" +
-      "\\\\\\\\\\([\\\\s\\\\S]*?\\\\\\\\\\\\)|\\\\\\\\begin\\\\{[a-zA-Z*]+\\\\}|" +
-      "\\\\\\\\[a-zA-Z]{2,})"
-    );
-    return latexRe.test(String(text || ""));
-  }
-
-  function parseFront(raw) {
-    if (containsLatex(raw)) {
-      return null;
-    }
-    var compact = raw.replace(/\\s+/g, " ").trim();
-    var re = /(^|\\s)([A-Ea-e])[\\.、\\):：\\-]\\s*/g;
-    var hits = [];
-    var m;
-    while ((m = re.exec(compact)) !== null) {
-      hits.push({
-        labelStart: m.index + m[1].length,
-        valueStart: re.lastIndex,
-        key: m[2].toUpperCase()
-      });
-    }
-    if (hits.length < 2) {
-      return null;
-    }
-
-    var question = compact.slice(0, hits[0].labelStart).trim();
-    var options = [];
-    for (var i = 0; i < hits.length; i++) {
-      var end = i + 1 < hits.length ? hits[i + 1].labelStart : compact.length;
-      var value = compact.slice(hits[i].valueStart, end).trim();
-      if (value) {
-        options.push({ key: hits[i].key, text: value });
-      }
-    }
-    return options.length ? { question: question, options: options } : null;
-  }
-
-  function normalizeAnswerKeys(raw) {
-    var keys = [];
-    String(raw || "").replace(/[A-Ea-e]/g, function (key) {
-      key = key.toUpperCase();
-      if (keys.indexOf(key) < 0) {
-        keys.push(key);
-      }
-      return key;
-    });
-    return keys.join("、");
-  }
-
-  function parseBack(raw) {
-    var text = String(raw || "").trim();
-    if (!text) {
-      return { answer: "（未标注）", explanation: "" };
-    }
-
-    var labeled = text.match(
-      /^(?:答案|正确答案|answer)\\s*[:：]\\s*([\\s\\S]+?)\\n(?:解析|explanation)\\s*[:：]\\s*([\\s\\S]+)$/i
-    );
-    if (labeled) {
-      return {
-        answer: labeled[1].trim() || "（未标注）",
-        explanation: labeled[2].trim()
-      };
-    }
-
-    function stripLeadingIndex(line) {
-      return String(line || "")
-        .replace(/^\\s*\\d+[\\.、\\):：-]\\s*/, "")
-        .trim();
-    }
-
-    var lines = text.split(/\\n+/).map(function (line) {
-      return line.trim();
-    }).filter(Boolean);
-    var normalizedLines = lines.map(stripLeadingIndex);
-
-    function normalizeExplanation(rawText) {
-      var explanationLines = String(rawText || "").split(/\\n+/).map(function (line) {
-        return stripLeadingIndex(line);
-      }).filter(Boolean);
-
-      if (!explanationLines.length) {
-        return "";
-      }
-
-      var markerWithText = explanationLines[0].match(/^(?:解析|explanation)\\s*[:：]\\s*(.+)$/i);
-      if (markerWithText) {
-        explanationLines[0] = markerWithText[1].trim();
-      }
-      while (
-        explanationLines.length &&
-        /^(?:解析|explanation)\\s*[:：]?\\s*$/i.test(explanationLines[0])
-      ) {
-        explanationLines.shift();
-      }
-      return explanationLines.join("\\n").trim();
-    }
-
-    var first = normalizedLines[0] || "";
-    var match = first.match(
-      /^(?:答案|正确答案|answer)?\\s*[:：]?\\s*([A-Ea-e](?:\\s*[,，、/]\\s*[A-Ea-e])*)$/i
-    );
-    if (match) {
-      return {
-        answer: normalizeAnswerKeys(match[1]) || "（未标注）",
-        explanation: normalizeExplanation(normalizedLines.slice(1).join("\\n"))
-      };
-    }
-
-    var answerLine = first.match(/^(?:答案|正确答案|answer)\\s*[:：]\\s*(.+)$/i);
-    if (answerLine) {
-      return {
-        answer: answerLine[1].trim() || "（未标注）",
-        explanation: normalizeExplanation(normalizedLines.slice(1).join("\\n"))
-      };
-    }
-
-    var prefixed = first.match(
-      /^([A-Ea-e](?:\\s*[,，、/]\\s*[A-Ea-e])*)(?:[\\.、\\):：\\-]\\s*|\\s+)(.+)$/
-    );
-    if (prefixed) {
-      return {
-        answer: normalizeAnswerKeys(prefixed[1]) || "（未标注）",
-        explanation: normalizeExplanation(
-          [prefixed[2]].concat(normalizedLines.slice(1)).join("\\n")
-        )
-      };
-    }
-
-    var inline = text.match(
-      /(?:答案|正确答案|answer)\\s*[:：]?\\s*([A-Ea-e](?:\\s*[,，、/]\\s*[A-Ea-e])*)/i
-    );
-    if (inline) {
-      return {
-        answer: normalizeAnswerKeys(inline[1]) || "（未标注）",
-        explanation: normalizeExplanation(text.replace(inline[0], "").trim())
-      };
-    }
-
-    return { answer: text, explanation: "" };
-  }
-
-  function splitExplanation(text) {
-    if (!text) {
-      return [];
-    }
-    var lines = text.split(/\\n+/).map(function (line) {
-      return line.trim();
-    }).filter(Boolean);
-    if (lines.length >= 2) {
-      return lines;
-    }
-
-    var sentenceMatches = lines[0].match(/[^。！？!?；;]+[。！？!?；;]?/g) || [lines[0]];
-    var sentences = sentenceMatches.map(function (item) {
-      return item.trim();
-    }).filter(Boolean);
-    if (sentences.length <= 1) {
-      return lines;
-    }
-
-    var sections = [];
-    var buffer = "";
-    sentences.forEach(function (sentence) {
-      if (buffer && (buffer.length + sentence.length) > 56) {
-        sections.push(buffer.trim());
-        buffer = sentence;
-      } else {
-        buffer = (buffer + " " + sentence).trim();
-      }
-    });
-    if (buffer) {
-      sections.push(buffer.trim());
-    }
-    return sections;
-  }
-
-  function formatFrontById(id) {
-    var el = document.getElementById(id);
-    if (!el) {
-      return;
-    }
-    var parsed = parseFront(toText(el.innerHTML));
-    if (!parsed) {
-      return;
-    }
-    var rows = parsed.options.map(function (opt) {
-      return (
-        '<div class="as-choice-row">' +
-          '<span class="as-choice-key">' + escapeHtml(opt.key) + '.</span>' +
-          '<span class="as-choice-text">' + formatWithBreaks(opt.text) + '</span>' +
-        '</div>'
-      );
-    }).join("");
-    el.innerHTML =
-      '<div class="as-question-text">' + formatWithBreaks(parsed.question) + '</div>' +
-      '<div class="as-choice-list">' + rows + "</div>";
-  }
-
-  function formatBackByIds(answerId, explanationId) {
-    var answerEl = document.getElementById(answerId);
-    var explanationEl = document.getElementById(explanationId);
-    if (!answerEl || !explanationEl) {
-      return;
-    }
-    var parsed = parseBack(toText(answerEl.innerHTML));
-    var sections = splitExplanation(parsed.explanation);
-    var explanationHtml = '<div class="as-explain-item">（无解析）</div>';
-    if (sections.length === 1) {
-      explanationHtml = '<div class="as-explain-item">' + formatWithBreaks(sections[0]) + "</div>";
-    } else if (sections.length > 1) {
-      explanationHtml =
-        '<div class="as-explain-stack">' +
-          sections.map(function (section) {
-            return '<div class="as-explain-item">' + formatWithBreaks(section) + "</div>";
-          }).join("") +
-        "</div>";
-    }
-
-    answerEl.innerHTML =
-      '<div class="as-answer-line">' +
-        '<span class="as-answer-label">答案：</span>' +
-        '<span class="as-answer-value">' + formatWithBreaks(parsed.answer) + "</span>" +
-      "</div>";
-    explanationEl.innerHTML = explanationHtml;
-  }
-
-  formatFrontById("as-front-content");
-  formatFrontById("as-front-side");
-  formatBackByIds("as-back-answer", "as-back-explain");
-})();
-</script>
-""".strip()
-
 # Pre-defined genanki models for standard note types
 _BASIC_MODEL = genanki.Model(
     1607392319,  # Fixed ID for consistency
@@ -319,7 +37,7 @@ _BASIC_MODEL = genanki.Model(
                 '<div class="as-card as-card-front">'
                 '<section class="as-block as-question-block">'
                 '<div class="as-block-title">问题</div>'
-                '<div id="as-front-content" class="as-block-content">{{Front}}</div>'
+                '<div class="as-block-content as-preformatted">{{Front}}</div>'
                 "</section>"
                 "</div>" + _CHOICE_FORMATTER_SCRIPT + TEMPLATE_ENHANCER_SCRIPT
             ),
@@ -327,11 +45,11 @@ _BASIC_MODEL = genanki.Model(
                 '<div class="as-card as-card-back">'
                 '<section class="as-block as-question-block">'
                 '<div class="as-block-title">问题</div>'
-                '<div id="as-front-side" class="as-block-content">{{Front}}</div>'
+                '<div class="as-block-content as-preformatted">{{Front}}</div>'
                 "</section>"
                 '<section class="as-block as-answer-block">'
                 '<div class="as-block-title">答案</div>'
-                '<div id="as-back-answer" class="as-block-content as-answer-box">{{Back}}</div>'
+                '<div class="as-block-content as-answer-box as-preformatted">{{Back}}</div>'
                 "</section>"
                 '<section class="as-block as-extra-block">'
                 '<div class="as-block-title">解析</div>'
@@ -355,7 +73,7 @@ _CLOZE_MODEL = genanki.Model(
                 '<div class="as-card as-card-front">'
                 '<section class="as-block as-question-block">'
                 '<div class="as-block-title">问题</div>'
-                '<div class="as-block-content">{{cloze:Text}}</div>'
+                '<div class="as-block-content as-preformatted">{{cloze:Text}}</div>'
                 "</section>"
                 "</div>"
             ),
@@ -363,15 +81,17 @@ _CLOZE_MODEL = genanki.Model(
                 '<div class="as-card as-card-back">'
                 '<section class="as-block as-question-block">'
                 '<div class="as-block-title">问题</div>'
-                '<div class="as-block-content">{{cloze:Text}}</div>'
+                '<div class="as-block-content as-preformatted">{{cloze:Text}}</div>'
                 "</section>"
                 '<section class="as-block as-answer-block">'
                 '<div class="as-block-title">答案</div>'
-                '<div class="as-block-content as-answer-box">{{cloze:Text}}</div>'
+                '<div class="as-block-content as-answer-box as-preformatted">{{cloze:Text}}</div>'
                 "</section>"
                 '<section class="as-block as-extra-block">'
                 '<div class="as-block-title">解析</div>'
-                '{{#Extra}}<div class="as-block-content as-extra">{{Extra}}</div>{{/Extra}}'
+                "{{#Extra}}"
+                '<div class="as-block-content as-extra as-preformatted">{{Extra}}</div>'
+                "{{/Extra}}"
                 '{{^Extra}}<div class="as-block-content as-extra">（无解析）</div>{{/Extra}}'
                 "</section>"
                 "</div>"
@@ -563,27 +283,43 @@ class ApkgExporter:
                 decks_map: dict[str, genanki.Deck] = {}
                 media_files: set[str] = set()
                 for card in cards:
-                    if card.deck_name not in decks_map:
-                        deck_id = random.randrange(1 << 30, 1 << 31)
-                        decks_map[card.deck_name] = genanki.Deck(deck_id, card.deck_name)
+                    normalized_card = normalize_card_draft(card)
+                    validation = validate_card_for_output(normalized_card)
+                    if validation.status == "blocking":
+                        first_error = validation.blocking_errors[0]
+                        raise AnkiGatewayError(
+                            _structure_error_message(first_error),
+                            code=(
+                                ErrorCode.E_CLOZE_SYNTAX_INVALID
+                                if first_error == "cloze_syntax_invalid"
+                                else ErrorCode.E_REQUIRED_FIELD_MISSING
+                            ),
+                            trace_id=trace_id,
+                        )
 
-                    deck = decks_map[card.deck_name]
-                    model = _get_model(card.note_type)
+                    if normalized_card.deck_name not in decks_map:
+                        deck_id = random.randrange(1 << 30, 1 << 31)
+                        decks_map[normalized_card.deck_name] = genanki.Deck(
+                            deck_id, normalized_card.deck_name
+                        )
+
+                    deck = decks_map[normalized_card.deck_name]
+                    model = _get_model(normalized_card.note_type)
 
                     # Build field values in model field order
-                    field_values = [card.fields.get(f["name"], "") for f in model.fields]
+                    field_values = [normalized_card.fields.get(f["name"], "") for f in model.fields]
 
                     note = genanki.Note(
                         model=model,
                         fields=field_values,
-                        tags=card.tags,
+                        tags=normalized_card.tags,
                     )
                     deck.add_note(note)
 
                     for media_items in (
-                        card.media.picture,
-                        card.media.audio,
-                        card.media.video,
+                        normalized_card.media.picture,
+                        normalized_card.media.audio,
+                        normalized_card.media.video,
                     ):
                         for media in media_items:
                             media_path = _materialize_media_file(media, temp_dir_path)
@@ -608,3 +344,9 @@ class ApkgExporter:
                 },
             )
             return output_path
+
+
+def _structure_error_message(error_key: str) -> str:
+    if error_key == "basic_missing_front":
+        return "Required field missing: Front"
+    return error_key

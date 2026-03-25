@@ -16,9 +16,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtWidgets import (
-    QMessageBox as _QMessageBox,
-)
 from qfluentwidgets import (
     BodyLabel,
     CardWidget,
@@ -39,20 +36,23 @@ from qfluentwidgets import (
     SettingCardGroup,
     SimpleCardWidget,
     Slider,
-    StateToolTip,
     SubtitleLabel,
     SwitchButton,
     isDarkTheme,
 )
 
 from ankismart.core.config import (
+    DEFAULT_GENERATION_PRESET,
+    GENERATION_PRESET_LIBRARY,
     append_task_history,
+    normalize_generation_preset,
     record_operation_metric,
     register_cloud_ocr_usage,
     save_config,
 )
 from ankismart.core.logging import get_logger
 from ankismart.core.models import BatchConvertResult, ConvertedDocument
+from ankismart.core.task_models import build_default_task_run
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.i18n import get_text
 from ankismart.ui.shortcuts import ShortcutKeys, create_shortcut, get_shortcut_text
@@ -62,8 +62,15 @@ from ankismart.ui.styles import (
     SPACING_LARGE,
     SPACING_MEDIUM,
     SPACING_SMALL,
+    apply_compact_combo_metrics,
 )
-from ankismart.ui.utils import ProgressMixin, format_operation_hint, split_tags_text
+from ankismart.ui.task_runtime import TaskEvent
+from ankismart.ui.utils import (
+    ProgressMixin,
+    format_operation_hint,
+    request_infobar_confirmation,
+    split_tags_text,
+)
 from ankismart.ui.workers import BatchConvertWorker
 from ankismart.ui.workflows import (
     ConvertWorkflowRequest,
@@ -71,8 +78,7 @@ from ankismart.ui.workflows import (
 )
 
 logger = get_logger(__name__)
-# Backward compatibility for tests patching ankismart.ui.import_page.QMessageBox.
-QMessageBox = _QMessageBox
+QMessageBox = MessageBox
 
 _OCR_FILE_SUFFIXES = {
     ".pdf",
@@ -84,8 +90,9 @@ _OCR_FILE_SUFFIXES = {
     ".webp",
 }
 _MERGED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+_PREVIEW_PROGRESS_SILENT_SUFFIXES = {".md", ".docx"}
 
-_RIGHT_OPTION_CARD_MAX_HEIGHT = 92
+_RIGHT_OPTION_CARD_MAX_HEIGHT = 72
 _RIGHT_CONFIG_GROUP_MAX_HEIGHT = 360
 _RIGHT_STRATEGY_GROUP_MAX_HEIGHT = 640
 
@@ -550,12 +557,14 @@ class ImportPage(ProgressMixin, QWidget):
         self._worker: BatchConvertWorker | None = None
         self._deck_loader: DeckLoaderWorker | None = None
         self._ocr_download_worker: OCRModelDownloadWorker | None = None
-        self._state_tooltip: StateToolTip | None = None
+        self._progress_info_bar = None
         self._model_check_in_progress = False
         self._last_ocr_progress_message: str = ""
         self._last_ocr_page_status_message: str = ""
         self._last_convert_ocr_message: str = ""
         self._convert_start_ts: float = 0.0
+        self._current_task_id: str = ""
+        self._confirmations: dict[str, float] = {}
 
         # Lazy-loaded heavy dependencies
         self._converter = None
@@ -565,11 +574,15 @@ class ImportPage(ProgressMixin, QWidget):
         self._strategy_group_init_scheduled = False
         self._strategy_group_host: QWidget | None = None
         self._strategy_sliders: list[tuple[str, Slider, BodyLabel]] = []
+        self._pending_generation_strategy_mix: dict[str, int] | None = None
 
         self.setObjectName("importPage")
 
         self._init_ui()
         self._init_shortcuts()
+        config_updated = getattr(self._main, "config_updated", None)
+        if config_updated is not None and hasattr(config_updated, "connect"):
+            config_updated.connect(self._on_main_config_updated)
 
     def _init_ui(self):
         """Initialize the user interface."""
@@ -754,6 +767,9 @@ class ImportPage(ProgressMixin, QWidget):
         strategy_group = self._create_strategy_group()
         layout.addWidget(strategy_group)
         self._strategy_group_initialized = True
+        if self._pending_generation_strategy_mix:
+            self._apply_strategy_mix(self._pending_generation_strategy_mix)
+            self._pending_generation_strategy_mix = None
 
     def _schedule_strategy_group_init(self) -> None:
         if self.__dict__.get("_strategy_group_initialized", True):
@@ -819,6 +835,31 @@ class ImportPage(ProgressMixin, QWidget):
         group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         group.setMaximumHeight(_RIGHT_CONFIG_GROUP_MAX_HEIGHT)
 
+        self._generation_preset_card = SettingCard(
+            FluentIcon.BOOK_SHELF,
+            "使用场景" if is_zh else "Usage Preset",
+            "一键套用常见制卡场景配置"
+            if is_zh
+            else "Apply common generation presets in one click",
+            group,
+        )
+        self._generation_preset_combo = ComboBox(self._generation_preset_card)
+        apply_compact_combo_metrics(
+            self._generation_preset_combo,
+            control_height=22,
+            popup_item_height=24,
+        )
+        self._enforce_compact_combo_height(self._generation_preset_combo, 22)
+        self._populate_generation_preset_combo()
+        self._generation_preset_card.hBoxLayout.addWidget(self._generation_preset_combo)
+        self._generation_preset_card.hBoxLayout.addSpacing(16)
+        self._generation_preset_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        self._generation_preset_card.setMaximumHeight(_RIGHT_OPTION_CARD_MAX_HEIGHT)
+        group_layout.addWidget(self._generation_preset_card)
+
         # Target count card
         self._count_card = SettingCard(
             FluentIcon.LABEL,
@@ -855,6 +896,8 @@ class ImportPage(ProgressMixin, QWidget):
         self._total_count_mode_combo.setCurrentText("auto")
         self._total_count_mode_combo.hide()  # Hidden but accessible for tests
         self._on_auto_target_count_changed(True)
+        self._restore_generation_preset_from_config()
+        self._generation_preset_combo.currentIndexChanged.connect(self._on_generation_preset_changed)
 
         # Deck name card
         self._deck_card = SettingCard(
@@ -915,6 +958,101 @@ class ImportPage(ProgressMixin, QWidget):
 
         return "Default"
 
+    def _populate_generation_preset_combo(self) -> None:
+        is_zh = self._main.config.language == "zh"
+        current = ""
+        if (
+            hasattr(self, "_generation_preset_combo")
+            and self._generation_preset_combo.count() > 0
+        ):
+            current = str(self._generation_preset_combo.currentData() or "")
+
+        self._generation_preset_combo.blockSignals(True)
+        self._generation_preset_combo.clear()
+        for preset_id, meta in GENERATION_PRESET_LIBRARY.items():
+            self._generation_preset_combo.addItem(
+                str(meta["label_zh"] if is_zh else meta["label_en"]),
+                userData=preset_id,
+            )
+
+        target = normalize_generation_preset(
+            current or getattr(self._main.config, "generation_preset", DEFAULT_GENERATION_PRESET)
+        )
+        for index in range(self._generation_preset_combo.count()):
+            if self._generation_preset_combo.itemData(index) == target:
+                self._generation_preset_combo.setCurrentIndex(index)
+                break
+        self._generation_preset_combo.blockSignals(False)
+
+    def _restore_generation_preset_from_config(self) -> None:
+        self._apply_generation_preset(
+            getattr(self._main.config, "generation_preset", DEFAULT_GENERATION_PRESET),
+            show_feedback=False,
+            persist=False,
+        )
+
+    def _on_generation_preset_changed(self, *_args) -> None:
+        self._apply_generation_preset(persist=True, show_feedback=False)
+
+    def _apply_generation_preset(
+        self,
+        preset_id: str | None = None,
+        *,
+        show_feedback: bool = False,
+        persist: bool = False,
+    ) -> None:
+        selected_id = normalize_generation_preset(
+            preset_id or str(self._generation_preset_combo.currentData() or "")
+        )
+        preset = GENERATION_PRESET_LIBRARY[selected_id]
+
+        for index in range(self._generation_preset_combo.count()):
+            if self._generation_preset_combo.itemData(index) == selected_id:
+                self._generation_preset_combo.setCurrentIndex(index)
+                break
+
+        auto_target_count = bool(preset.get("auto_target_count", True))
+        target_total = int(preset.get("target_total", 20))
+        strategy_mix = {
+            str(key): int(value)
+            for key, value in dict(preset.get("strategy_mix", {})).items()
+        }
+
+        self._auto_target_count_switch.blockSignals(True)
+        self._auto_target_count_switch.setChecked(auto_target_count)
+        self._auto_target_count_switch.blockSignals(False)
+        self._on_auto_target_count_changed(auto_target_count)
+        self._total_count_input.setText(str(target_total))
+
+        if self._strategy_group_initialized:
+            self._apply_strategy_mix(strategy_mix)
+        else:
+            self._pending_generation_strategy_mix = strategy_mix
+
+        if persist:
+            updated = self._main.config.model_copy(update={"generation_preset": selected_id})
+            apply_runtime = getattr(self._main, "apply_runtime_config", None)
+            if callable(apply_runtime):
+                apply_runtime(updated, persist=True, changed_fields={"generation_preset"})
+            else:
+                self._main.config = updated
+                try:
+                    save_config(updated)
+                except Exception:
+                    logger.warning("Failed to persist generation preset", exc_info=True)
+
+        if show_feedback:
+            is_zh = self._main.config.language == "zh"
+            InfoBar.success(
+                title="已应用预设" if is_zh else "Preset Applied",
+                content=str(preset["label_zh"] if is_zh else preset["label_en"]),
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=2200,
+                parent=self,
+            )
+
     def _create_strategy_group(self) -> SettingCardGroup:
         """Create strategy configuration group with RangeSettingCards."""
         is_zh = self._main.config.language == "zh"
@@ -932,16 +1070,21 @@ class ImportPage(ProgressMixin, QWidget):
             group,
         )
         self._strategy_template_combo = ComboBox(template_card)
+        apply_compact_combo_metrics(
+            self._strategy_template_combo,
+            control_height=22,
+            popup_item_height=24,
+        )
+        self._enforce_compact_combo_height(self._strategy_template_combo, 22)
         for key, meta in _STRATEGY_TEMPLATE_LIBRARY.items():
             self._strategy_template_combo.addItem(
                 str(meta["zh"] if is_zh else meta["en"]),
                 userData=key,
             )
-        self._strategy_template_combo.currentIndexChanged.connect(self._on_strategy_template_changed)
-        self._btn_apply_strategy_template = PushButton("应用" if is_zh else "Apply")
-        self._btn_apply_strategy_template.clicked.connect(self._apply_selected_strategy_template)
+        self._strategy_template_combo.currentIndexChanged.connect(
+            self._on_strategy_template_changed
+        )
         template_card.hBoxLayout.addWidget(self._strategy_template_combo)
-        template_card.hBoxLayout.addWidget(self._btn_apply_strategy_template)
         template_card.hBoxLayout.addSpacing(16)
         template_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         template_card.setMaximumHeight(_RIGHT_OPTION_CARD_MAX_HEIGHT)
@@ -1018,7 +1161,7 @@ class ImportPage(ProgressMixin, QWidget):
     def _on_strategy_template_changed(self, *_args) -> None:
         self._apply_selected_strategy_template(show_feedback=False)
 
-    def _apply_selected_strategy_template(self, *, show_feedback: bool = True) -> None:
+    def _apply_selected_strategy_template(self, *, show_feedback: bool = False) -> None:
         self._initialize_strategy_group_if_needed()
         template_id = str(self._strategy_template_combo.currentData() or "")
         template = _STRATEGY_TEMPLATE_LIBRARY.get(template_id)
@@ -1225,9 +1368,7 @@ class ImportPage(ProgressMixin, QWidget):
         count = len(queue)
         is_zh = self._main.config.language == "zh"
         button.setVisible(count > 0)
-        button.setText(
-            f"继续失败任务 ({count})" if is_zh else f"Resume Failed OCR Tasks ({count})"
-        )
+        button.setText(f"继续失败任务 ({count})" if is_zh else f"Resume Failed OCR Tasks ({count})")
 
     def _resume_failed_tasks(self) -> None:
         queue = list(getattr(self._main.config, "ocr_resume_file_paths", []) or [])
@@ -1449,11 +1590,11 @@ class ImportPage(ProgressMixin, QWidget):
         if hasattr(worker, "deleteLater"):
             worker.deleteLater()
 
-    def _dispose_state_tooltip(self) -> None:
-        tooltip = self.__dict__.get("_state_tooltip")
-        self.__dict__["_state_tooltip"] = None
-        if tooltip is not None and hasattr(tooltip, "deleteLater"):
-            tooltip.deleteLater()
+    def _dispose_progress_info_bar(self) -> None:
+        info_bar = self.__dict__.get("_progress_info_bar")
+        self.__dict__["_progress_info_bar"] = None
+        if info_bar is not None and hasattr(info_bar, "close"):
+            info_bar.close()
 
     def _select_files(self):
         """Open file dialog to select files."""
@@ -1813,6 +1954,16 @@ class ImportPage(ProgressMixin, QWidget):
         self._status_label.setText(
             "正在转换文件..." if self._main.config.language == "zh" else "Converting files..."
         )
+        task = self._create_task_run("full_pipeline")
+        self._current_task_id = task.task_id
+        self._publish_task_event(
+            TaskEvent(
+                task_id=task.task_id,
+                stage="convert",
+                kind="started",
+                message="conversion started",
+            )
+        )
 
         self._cleanup_batch_worker()
         self._worker = BatchConvertWorker(self._file_paths, self._main.config)
@@ -1883,35 +2034,24 @@ class ImportPage(ProgressMixin, QWidget):
             model_source=getattr(self._main.config, "ocr_model_source", "official"),
         )
         model_list = ", ".join(missing_models)
-        confirm_message = (
-            f"检测到缺失的 OCR 模型：{model_list}\n\n是否立即下载？"
-            if is_zh
-            else f"Missing OCR models detected: {model_list}\n\nDownload now?"
+        self._show_info_bar(
+            "info",
+            "开始下载 OCR 模型" if is_zh else "Starting OCR Model Download",
+            (
+                f"检测到缺失模型：{model_list}，已自动开始下载"
+                if is_zh
+                else f"Missing models detected: {model_list}. Download started automatically"
+            ),
+            duration=2600,
         )
-
-        # For question dialogs, we'll use MessageBox from qfluentwidgets instead
-        from qfluentwidgets import MessageBox
-
-        w = MessageBox("下载 OCR 模型" if is_zh else "Download OCR Models", confirm_message, self)
-        if w.exec():
-            # User clicked Yes/OK
-            pass
-        else:
-            # User clicked No/Cancel
-            return False
 
         # Start download in background thread
         self._model_check_in_progress = True
         self._set_generate_actions_enabled(False)
-
-        # Show progress tooltip
-        self._state_tooltip = StateToolTip(
+        self._show_progress_info_bar(
             "正在下载 OCR 模型" if is_zh else "Downloading OCR Models",
             "请稍候..." if is_zh else "Please wait...",
-            self.window(),
         )
-        self._state_tooltip.move(self._state_tooltip.getSuitablePos())
-        self._state_tooltip.show()
 
         # Create and start worker
         self._cleanup_ocr_download_worker()
@@ -1924,39 +2064,29 @@ class ImportPage(ProgressMixin, QWidget):
         self._ocr_download_worker.error.connect(self._on_ocr_download_error)
         self._ocr_download_worker.start()
         self._last_ocr_progress_message = ""
-        InfoBar.info(
-            title="开始下载" if is_zh else "Download Started",
-            content="正在下载 OCR 模型，进度会在顶部通知中更新。"
+        self._show_info_bar(
+            "info",
+            "开始下载" if is_zh else "Download Started",
+            "正在下载 OCR 模型，进度会在顶部通知中更新。"
             if is_zh
             else "Downloading OCR models. Progress will be updated in top notifications.",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
             duration=1800,
-            parent=self,
         )
 
         return False  # Return False to prevent immediate conversion start
 
     def _on_ocr_download_progress(self, current: int, total: int, message: str):
         """Handle OCR model download progress."""
-        if self._state_tooltip:
-            self._state_tooltip.setContent(message)
-
         is_zh = self._main.config.language == "zh"
         progress_text = f"[{current}/{total}] {message}" if total > 0 else message
         if progress_text == self._last_ocr_progress_message:
             return
 
         self._last_ocr_progress_message = progress_text
-        InfoBar.info(
-            title="下载中" if is_zh else "Downloading",
-            content=progress_text,
-            orient=Qt.Orientation.Horizontal,
-            isClosable=False,
-            position=InfoBarPosition.TOP,
+        self._show_progress_info_bar(
+            "下载中" if is_zh else "Downloading",
+            progress_text,
             duration=1800,
-            parent=self,
         )
 
     def _on_ocr_download_finished(self, downloaded_models: list[str]):
@@ -1965,30 +2095,16 @@ class ImportPage(ProgressMixin, QWidget):
         self._last_ocr_progress_message = ""
         self._set_generate_actions_enabled(True)
         self._cleanup_ocr_download_worker()
-
-        if self._state_tooltip:
-            is_zh = self._main.config.language == "zh"
-            success_msg = (
-                f"模型下载完成！已下载 {len(downloaded_models)} 个模型"
-                if is_zh
-                else f"Download complete! {len(downloaded_models)} model(s) downloaded"
-            )
-            self._state_tooltip.setContent(success_msg)
-            self._state_tooltip.setState(True)
-            self._dispose_state_tooltip()
+        self._dispose_progress_info_bar()
 
         # Show success message
         is_zh = self._main.config.language == "zh"
-        InfoBar.success(
-            title="下载成功" if is_zh else "Download Successful",
-            content="OCR 模型已成功下载，现在可以开始转换文件了。"
+        self._show_info_bar(
+            "success",
+            "下载成功" if is_zh else "Download Successful",
+            "OCR 模型已成功下载，现在可以开始转换文件了。"
             if is_zh
             else "OCR models downloaded successfully. You can now start converting files.",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=3000,
-            parent=self,
         )
 
     def _on_ocr_download_error(self, error_message: str):
@@ -1997,12 +2113,7 @@ class ImportPage(ProgressMixin, QWidget):
         self._last_ocr_progress_message = ""
         self._set_generate_actions_enabled(True)
         self._cleanup_ocr_download_worker()
-
-        if self._state_tooltip:
-            is_zh = self._main.config.language == "zh"
-            self._state_tooltip.setContent("下载失败" if is_zh else "Download failed")
-            self._state_tooltip.setState(True)
-            self._dispose_state_tooltip()
+        self._dispose_progress_info_bar()
 
         # Show error message
         is_zh = self._main.config.language == "zh"
@@ -2014,14 +2125,11 @@ class ImportPage(ProgressMixin, QWidget):
             "or manually download the model files."
         )
 
-        InfoBar.error(
-            title="下载失败" if is_zh else "Download Failed",
-            content=error_detail,
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "error",
+            "下载失败" if is_zh else "Download Failed",
+            error_detail,
             duration=5000,
-            parent=self,
         )
 
     def build_generation_config(self) -> dict:
@@ -2057,6 +2165,45 @@ class ImportPage(ProgressMixin, QWidget):
                 event="convert",
                 language=self._main.config.language,
             )
+        )
+
+    def _show_info_bar(
+        self,
+        level: str,
+        title: str,
+        content: str,
+        *,
+        duration: int = 3000,
+        is_closable: bool = True,
+    ) -> None:
+        """Show fluent InfoBar notifications consistently."""
+        level_map = {
+            "success": InfoBar.success,
+            "warning": InfoBar.warning,
+            "error": InfoBar.error,
+            "info": InfoBar.info,
+        }
+        show = level_map.get(level, InfoBar.info)
+        show(
+            title=title,
+            content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=is_closable,
+            position=InfoBarPosition.TOP,
+            duration=duration,
+            parent=self,
+        )
+
+    def _show_progress_info_bar(self, title: str, content: str, *, duration: int = 1800) -> None:
+        self._dispose_progress_info_bar()
+        self.__dict__["_progress_info_bar"] = InfoBar.info(
+            title=title,
+            content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=False,
+            position=InfoBarPosition.TOP,
+            duration=duration,
+            parent=self,
         )
 
     def _on_file_progress(self, filename: str, current: int, total: int):
@@ -2095,6 +2242,16 @@ class ImportPage(ProgressMixin, QWidget):
         )
 
         self._status_label.setText(f"{file_text}\n{overall_text}")
+        task_id = str(self.__dict__.get("_current_task_id", "") or "")
+        self._publish_task_event(
+            TaskEvent(
+                task_id=task_id,
+                stage="convert",
+                kind="progress",
+                progress=percentage,
+                message=file_text,
+            )
+        )
 
     def _on_file_completed(self, filename: str, document: ConvertedDocument):
         """Handle single file conversion completion."""
@@ -2120,10 +2277,8 @@ class ImportPage(ProgressMixin, QWidget):
             if preview_page and preview_page.isVisible():
                 preview_page.add_converted_document(document)
 
-                # Count remaining pending files
-                pending_count = sum(
-                    1 for status in self._file_status.values() if status != "completed"
-                )
+                # md/docx conversions should not surface as preview-page progress prompts.
+                pending_count = self._count_preview_pending_files()
                 preview_page.update_converting_status(pending_count)
             else:
                 self._main.batch_result.documents.append(document)
@@ -2134,7 +2289,7 @@ class ImportPage(ProgressMixin, QWidget):
             self._main.batch_result = BatchConvertResult(documents=[document], errors=[])
 
             # Switch to preview page with pending files indicator
-            pending_count = sum(1 for status in self._file_status.values() if status != "completed")
+            pending_count = self._count_preview_pending_files()
             total_files = len(self._file_status)
             self._main.switch_to_preview(
                 pending_files_count=pending_count, total_expected=total_files
@@ -2142,6 +2297,15 @@ class ImportPage(ProgressMixin, QWidget):
 
     def _on_file_warning(self, message: str) -> None:
         is_zh = self._main.config.language == "zh"
+        task_id = str(self.__dict__.get("_current_task_id", "") or "")
+        self._publish_task_event(
+            TaskEvent(
+                task_id=task_id,
+                stage="convert",
+                kind="warning",
+                message=message,
+            )
+        )
         InfoBar.warning(
             title="OCR 质量预警" if is_zh else "OCR Quality Warning",
             content=message,
@@ -2155,6 +2319,7 @@ class ImportPage(ProgressMixin, QWidget):
     def _on_page_progress(self, filename: str, current_page: int, total_pages: int):
         """Handle OCR page-by-page progress."""
         from ankismart.ui.i18n import get_text
+
         is_cloud = str(getattr(self._main.config, "ocr_mode", "local")).strip().lower() == "cloud"
 
         # Update status label with detailed page information
@@ -2204,21 +2369,27 @@ class ImportPage(ProgressMixin, QWidget):
                     total=total_files,
                 )
                 self._status_label.setText(f"{file_text}\n{overall_text}")
+                task_id = str(self.__dict__.get("_current_task_id", "") or "")
+                self._publish_task_event(
+                    TaskEvent(
+                        task_id=task_id,
+                        stage="convert",
+                        kind="progress",
+                        progress=percentage,
+                        message=file_text,
+                    )
+                )
             else:
                 self._status_label.setText(file_text)
 
             page_status_text = f"{filename} {current_page}/{total_pages}"
             if page_status_text != getattr(self, "_last_ocr_page_status_message", ""):
                 self._last_ocr_page_status_message = page_status_text
-                is_zh = self._main.config.language == "zh"
-                InfoBar.info(
-                    title="OCR 识别中" if is_zh else "OCR In Progress",
-                    content=page_status_text,
-                    orient=Qt.Orientation.Horizontal,
-                    isClosable=False,
-                    position=InfoBarPosition.TOP,
-                    duration=1500,
-                    parent=self,
+                self._status_label.setText(file_text)
+                self._show_progress_info_bar(
+                    "页进度" if self._main.config.language == "zh" else "Page Progress",
+                    page_status_text,
+                    duration=1800,
                 )
 
     def _on_ocr_progress(self, message: str) -> None:
@@ -2258,6 +2429,16 @@ class ImportPage(ProgressMixin, QWidget):
             if path.exists():
                 failed_paths.append(str(path))
         return failed_paths
+
+    def _count_preview_pending_files(self) -> int:
+        pending = 0
+        for file_key, status in self.__dict__.get("_file_status", {}).items():
+            if status == "completed":
+                continue
+            if Path(file_key).suffix.lower() in _PREVIEW_PROGRESS_SILENT_SUFFIXES:
+                continue
+            pending += 1
+        return pending
 
     def _update_resume_queue_from_status(self) -> None:
         failed_paths = self._collect_failed_file_paths_from_status()
@@ -2359,9 +2540,7 @@ class ImportPage(ProgressMixin, QWidget):
             tail = "" if len(quality_warnings) <= 3 else f"\n... +{len(quality_warnings) - 3}"
             InfoBar.warning(
                 title=(
-                    "OCR 质量预警"
-                    if self._main.config.language == "zh"
-                    else "OCR Quality Warning"
+                    "OCR 质量预警" if self._main.config.language == "zh" else "OCR Quality Warning"
                 ),
                 content=preview_msg + tail,
                 orient=Qt.Orientation.Horizontal,
@@ -2378,10 +2557,27 @@ class ImportPage(ProgressMixin, QWidget):
                 if self._main.config.language == "zh"
                 else "No files converted successfully"
             )
+            self._publish_task_event(
+                TaskEvent(
+                    task_id=str(self.__dict__.get("_current_task_id", "") or ""),
+                    stage="convert",
+                    kind="failed",
+                    message="no documents converted",
+                )
+            )
             return
 
         # Store result and switch to preview page
         self._main.batch_result = result
+        self._publish_task_event(
+            TaskEvent(
+                task_id=str(self.__dict__.get("_current_task_id", "") or ""),
+                stage="convert",
+                kind="completed",
+                progress=100,
+                message=f"converted {len(result.documents)} documents",
+            )
+        )
         self._status_label.setText(
             f"转换完成: {len(result.documents)} 个文件"
             if self._main.config.language == "zh"
@@ -2415,35 +2611,39 @@ class ImportPage(ProgressMixin, QWidget):
             if self._main.config.language == "zh"
             else f"Conversion failed: {error_display['title']}"
         )
-        InfoBar.error(
-            title=error_display["title"],
-            content=error_display["content"],
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._publish_task_event(
+            TaskEvent(
+                task_id=str(self.__dict__.get("_current_task_id", "") or ""),
+                stage="convert",
+                kind="failed",
+                message=error_display["content"],
+            )
+        )
+        self._show_info_bar(
+            "error",
+            error_display["title"],
+            error_display["content"],
             duration=5000,
-            parent=self,
         )
 
     def _cancel_operation(self):
         """Cancel the current operation."""
         if self._worker and self._worker.isRunning():
-            from qfluentwidgets import MessageBox
-
-            w = MessageBox(
-                "确认取消" if self._main.config.language == "zh" else "Confirm Cancel",
-                "确定要取消当前操作吗？"
-                if self._main.config.language == "zh"
-                else "Are you sure you want to cancel?",
+            is_zh = self._main.config.language == "zh"
+            if not request_infobar_confirmation(
                 self,
-            )
+                self._confirmations,
+                key="cancel_convert",
+                title="再次点击取消" if is_zh else "Click Again to Cancel",
+                content="再次点击取消当前转换任务"
+                if is_zh
+                else "Click cancel again to stop the current conversion",
+            ):
+                return
 
-            if w.exec():
-                self._worker.cancel()
-                self._btn_cancel.setEnabled(False)
-                self._status_label.setText(
-                    "正在取消..." if self._main.config.language == "zh" else "Cancelling..."
-                )
+            self._worker.cancel()
+            self._btn_cancel.setEnabled(False)
+            self._status_label.setText("正在取消..." if is_zh else "Cancelling...")
 
     def _on_operation_cancelled(self):
         """Handle operation cancellation."""
@@ -2469,6 +2669,14 @@ class ImportPage(ProgressMixin, QWidget):
         save_config(self._main.config)
         self._status_label.setText(
             "操作已取消" if self._main.config.language == "zh" else "Operation cancelled"
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=str(self.__dict__.get("_current_task_id", "") or ""),
+                stage="convert",
+                kind="cancelled",
+                message="conversion cancelled",
+            )
         )
 
         from PyQt6.QtCore import Qt
@@ -2504,7 +2712,7 @@ class ImportPage(ProgressMixin, QWidget):
         self._cleanup_batch_worker()
         self._cleanup_ocr_download_worker()
         self._cleanup_deck_loader_worker()
-        self._dispose_state_tooltip()
+        self._dispose_progress_info_bar()
         super().closeEvent(event)
 
     def _clear_all(self):
@@ -2520,6 +2728,20 @@ class ImportPage(ProgressMixin, QWidget):
             else:
                 slider.setValue(0)
                 value_label.setText("0%")
+
+    def _create_task_run(self, flow: str):
+        task = build_default_task_run(flow=flow)
+        register_task = getattr(self._main, "register_task", None)
+        if callable(register_task):
+            return register_task(task, activate=True)
+        return task
+
+    def _publish_task_event(self, event: TaskEvent) -> None:
+        if not event.task_id:
+            return
+        publish = getattr(self._main, "publish_task_event", None)
+        if callable(publish):
+            publish(event)
 
     def _load_example(self):
         """Show dialog to select and load example documents."""
@@ -2667,10 +2889,6 @@ class ImportPage(ProgressMixin, QWidget):
         # Get recommended strategy based on content type
         strategy_mix = self._get_recommended_strategy(content_type)
 
-        # Show recommendation dialog
-        dialog = MessageBox("策略推荐" if is_zh else "Strategy Recommendation", "", self)
-
-        # Build recommendation content
         type_names = {
             "math_science": ("数学/理科内容", "Math/Science Content"),
             "liberal_arts": ("文科/历史内容", "Liberal Arts/History Content"),
@@ -2700,13 +2918,7 @@ class ImportPage(ProgressMixin, QWidget):
         type_name = type_names.get(content_type, type_names["general"])
         type_desc = type_descs.get(content_type, type_descs["general"])
 
-        content = f"""
-<h3>{type_name[0] if is_zh else type_name[1]}</h3>
-<p>{type_desc[0] if is_zh else type_desc[1]}</p>
-<br>
-<h4>{"推荐策略配置：" if is_zh else "Recommended Strategy:"}</h4>
-<ul>
-"""
+        strategy_summary: list[str] = []
 
         strategy_names = {
             "basic": ("基础问答", "Basic Q&A"),
@@ -2720,29 +2932,22 @@ class ImportPage(ProgressMixin, QWidget):
         for strategy_id, ratio in strategy_mix.items():
             if ratio > 0:
                 name = strategy_names.get(strategy_id, (strategy_id, strategy_id))
-                content += f"<li>{name[0] if is_zh else name[1]}: {ratio}%</li>"
+                strategy_summary.append(f"{name[0] if is_zh else name[1]} {ratio}%")
 
-        content += "</ul>"
-
-        dialog.setText(content)
-        dialog.yesButton.setText("应用推荐" if is_zh else "Apply Recommendation")
-        dialog.cancelButton.setText("取消" if is_zh else "Cancel")
-
-        if dialog.exec():
-            # Apply recommended strategy
-            self._apply_strategy_mix(strategy_mix)
-
-            InfoBar.success(
-                title="已应用推荐策略" if is_zh else "Recommendation Applied",
-                content="已根据文档类型应用推荐的生成策略"
+        self._apply_strategy_mix(strategy_mix)
+        self._show_info_bar(
+            "success",
+            "已应用推荐策略" if is_zh else "Recommendation Applied",
+            (
+                f"{type_name[0]}：{type_desc[0]}；建议配比 {', '.join(strategy_summary)}"
                 if is_zh
-                else "Applied recommended strategy based on document type",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
-            )
+                else (
+                    f"{type_name[1]}: {type_desc[1]}; "
+                    f"recommended mix {', '.join(strategy_summary)}"
+                )
+            ),
+            duration=3600,
+        )
 
     def _analyze_content_type(self) -> str:
         """Analyze file content to determine content type."""
@@ -2812,6 +3017,12 @@ class ImportPage(ProgressMixin, QWidget):
                 slider.setValue(ratio)
                 value_label.setText(f"{ratio}%")
 
+    def _on_main_config_updated(self, changed_fields: list[str]) -> None:
+        if "generation_preset" not in {str(item) for item in changed_fields}:
+            return
+        self._populate_generation_preset_combo()
+        self._restore_generation_preset_from_config()
+
     def retranslate_ui(self):
         """Retranslate UI elements when language changes."""
         is_zh = self._main.config.language == "zh"
@@ -2828,8 +3039,8 @@ class ImportPage(ProgressMixin, QWidget):
         if hasattr(self, "_resume_failed_btn"):
             self._refresh_resume_failed_button()
 
-        if hasattr(self, "_btn_apply_strategy_template"):
-            self._btn_apply_strategy_template.setText("应用" if is_zh else "Apply")
+        if hasattr(self, "_generation_preset_combo"):
+            self._populate_generation_preset_combo()
 
         if hasattr(self, "_strategy_template_combo"):
             current = self._strategy_template_combo.currentData()
@@ -2850,10 +3061,36 @@ class ImportPage(ProgressMixin, QWidget):
                 self._strategy_template_combo.setCurrentIndex(0)
             self._strategy_template_combo.blockSignals(False)
 
-
     def update_theme(self):
         """Update theme-dependent components when theme changes."""
         self._refresh_file_item_colors()
+
+    def _enforce_compact_combo_height(self, combo: QWidget, target_height: int) -> None:
+        def _apply_height() -> None:
+            if combo is None:
+                return
+            try:
+                for name in ("setFixedHeight", "setMinimumHeight", "setMaximumHeight"):
+                    setter = getattr(combo, name, None)
+                    if callable(setter):
+                        setter(target_height)
+                line_edit_getter = getattr(combo, "lineEdit", None)
+                if callable(line_edit_getter):
+                    editor = line_edit_getter()
+                    if editor is not None:
+                        for name in ("setFixedHeight", "setMinimumHeight", "setMaximumHeight"):
+                            setter = getattr(editor, name, None)
+                            if callable(setter):
+                                setter(target_height)
+            except RuntimeError:
+                return
+
+        _apply_height()
+        timer = QTimer(combo)
+        timer.setSingleShot(True)
+        timer.timeout.connect(_apply_height)
+        timer.start(0)
+        setattr(combo, "_ankismart_compact_height_timer", timer)
 
     @staticmethod
     def _get_pending_item_color() -> QColor:

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import sys
 import time
+from statistics import median
 
 import pytest
 from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig
+from ankismart.core.task_models import TaskStatus, build_default_task_run
 from ankismart.ui import app as app_module
 from ankismart.ui.main_window import MainWindow
 from tests.e2e.conftest import _configure_test_qapp, _teardown_test_window
@@ -46,11 +48,72 @@ def test_main_window_smoke(monkeypatch) -> None:
 def test_main_window_startup_smoke_budget(monkeypatch) -> None:
     monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
 
-    started = time.perf_counter()
-    window = MainWindow(config=AppConfig(language="zh", theme="light"))
-    elapsed_ms = (time.perf_counter() - started) * 1000
+    app = _get_app()
+    warmup = MainWindow(config=AppConfig(language="zh", theme="light"))
+    warmup.close()
+    app.processEvents()
 
-    assert elapsed_ms < 350
+    samples_ms: list[float] = []
+    for _ in range(3):
+        started = time.perf_counter()
+        window = MainWindow(config=AppConfig(language="zh", theme="light"))
+        samples_ms.append((time.perf_counter() - started) * 1000)
+        window.close()
+        app.processEvents()
+
+    assert median(samples_ms) < 350
+
+
+def test_main_window_keeps_sidebar_back_action(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+
+    app = _get_app()
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+    window.show()
+    app.processEvents()
+
+    back_buttons = [
+        button
+        for button in window.navigationInterface.findChildren(object)
+        if hasattr(button, "toolTip")
+        and callable(button.toolTip)
+        and button.toolTip() == "Back"
+    ]
+
+    assert any(button.isVisible() for button in back_buttons if hasattr(button, "isVisible"))
+    window.close()
+    app.processEvents()
+
+
+def test_main_window_title_bar_uses_default_compact_size(monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+
+    app = _get_app()
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+    window.show()
+    app.processEvents()
+
+    assert window.titleBar.height() == 36
+    assert getattr(window, "_title_bar_label", None) is None
+    assert getattr(window, "_title_bar_icon_label", None) is None
+
+    window.close()
+    app.processEvents()
+
+
+def test_main_window_loads_resumable_tasks(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("ankismart.ui.main_window.save_config", lambda _cfg: None)
+    monkeypatch.setattr("ankismart.ui.main_window.TASKS_PATH", tmp_path / "tasks.json")
+    task = build_default_task_run(flow="full_pipeline", task_id="task-r1")
+    task.status = TaskStatus.FAILED
+    task.resume_from_stage = "generate"
+    monkeypatch.setattr("ankismart.ui.main_window.load_resumable_tasks", lambda _store: [task])
+
+    window = MainWindow(config=AppConfig(language="zh", theme="light"))
+
+    assert [item.task_id for item in window.resumable_tasks] == ["task-r1"]
+    assert "task-r1" in window.task_center_panel._task_widgets
+    assert window.task_center_panel.isVisible() is False
     window.close()
 
 

@@ -37,6 +37,7 @@ from qfluentwidgets import (
 
 from ankismart.core.models import CardDraft, CardPushStatus, PushResult
 from ankismart.ui.card_edit_widget import CardEditDialog
+from ankismart.ui.card_preview_renderer import format_quality_flags
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.i18n import t
 from ankismart.ui.styles import (
@@ -46,13 +47,48 @@ from ankismart.ui.styles import (
     SPACING_SMALL,
     apply_compact_combo_metrics,
     apply_page_title_style,
+    get_theme_accent_text_hex,
 )
+from ankismart.ui.task_runtime import TaskEvent
 from ankismart.ui.workers import ExportWorker, PushWorker
 
 logger = logging.getLogger(__name__)
 _REAL_APKG_EXPORTER_CLASS = None
 AnkiConnectClient = None
 AnkiGateway = None
+
+_STRUCTURE_ERROR_TEXTS = {
+    "basic_missing_front": ("缺少问题内容（Front）", "Missing question content (Front)"),
+    "basic_missing_answer": ("缺少答案内容（Back）", "Missing answer content (Back)"),
+    "choice_missing_question": ("缺少题干", "Missing question text"),
+    "invalid_option_count": ("选项数量不合法", "Invalid option count"),
+    "choice_missing_answer": ("缺少正确答案", "Missing correct answer"),
+    "choice_answer_not_in_options": ("答案不在选项中", "Answer not found in options"),
+    "insufficient_correct_options": (
+        "多选题正确答案数量不足",
+        "Not enough correct options for multiple choice",
+    ),
+    "unsupported_generic_structure": ("卡片结构暂不支持", "Unsupported card structure"),
+    "cloze_syntax_invalid": ("填空语法无效", "Invalid cloze syntax"),
+}
+
+
+def _localized_text(mapping: dict[str, tuple[str, str]], key: str, lang: str) -> str:
+    zh_text, en_text = mapping.get(key, (key, key))
+    return zh_text if lang == "zh" else en_text
+
+
+def _format_structure_error(error_key: str, lang: str) -> str:
+    return _localized_text(_STRUCTURE_ERROR_TEXTS, str(error_key or "").strip(), lang)
+
+
+def _format_status_message(message: str, lang: str) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    if text in _STRUCTURE_ERROR_TEXTS:
+        return _format_structure_error(text, lang)
+    return text
 
 
 def _load_gateway_classes():
@@ -123,6 +159,7 @@ class ResultPage(QWidget):
         self._cards: list[CardDraft] = []
         self._selected_indices: set[int] = set()  # Track selected card indices
         self._result_feedback_key: tuple[str, int, int, int] | None = None
+        self._current_task_id: str = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(SPACING_SMALL)
@@ -140,7 +177,11 @@ class ResultPage(QWidget):
         stats_row.setSpacing(SPACING_MEDIUM)
 
         lang = getattr(self._main.config, "language", "zh")
-        self._card_total = self._create_stat_card(t("result.total_cards", lang), "0", "#409EFF")
+        self._card_total = self._create_stat_card(
+            t("result.total_cards", lang),
+            "0",
+            get_theme_accent_text_hex(),
+        )
         self._card_success = self._create_stat_card(
             t("result.success_pushed", lang), "0", "#67C23A"
         )
@@ -227,6 +268,12 @@ class ResultPage(QWidget):
         self._btn_batch_edit_deck.clicked.connect(self._batch_edit_deck)
         self._btn_batch_edit_deck.setEnabled(False)
         all_buttons_row.addWidget(self._btn_batch_edit_deck)
+
+        self._btn_export_selected = PushButton("导出所选" if lang == "zh" else "Export Selected")
+        self._btn_export_selected.setMinimumHeight(34)
+        self._btn_export_selected.clicked.connect(self._export_selected_apkg)
+        self._btn_export_selected.setEnabled(False)
+        all_buttons_row.addWidget(self._btn_export_selected)
 
         self._btn_retry = PushButton(t("result.retry_failed", lang))
         self._btn_retry.setMinimumHeight(34)
@@ -447,35 +494,49 @@ class ResultPage(QWidget):
         """Handle allow duplicate switch change."""
         self._main.config.allow_duplicate = checked
 
+    def _show_info_bar(
+        self,
+        level: str,
+        title: str,
+        content: str,
+        *,
+        duration: int = 3000,
+        is_closable: bool = True,
+    ) -> None:
+        """Show fluent InfoBar notifications consistently."""
+        level_map = {
+            "success": InfoBar.success,
+            "warning": InfoBar.warning,
+            "error": InfoBar.error,
+            "info": InfoBar.info,
+        }
+        show = level_map.get(level, InfoBar.info)
+        show(
+            title=title,
+            content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=is_closable,
+            position=InfoBarPosition.TOP,
+            duration=duration,
+            parent=self,
+        )
+
     def _export_apkg(self) -> None:
         """导出所有卡片为 APKG。"""
         if not self._cards:
-            InfoBar.info(
-                title="提示",
-                content="没有卡片需要导出",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self,
-            )
+            self._show_info_bar("info", "提示", "没有卡片需要导出", duration=2000)
             return
         if self._export_worker and self._export_worker.isRunning():
             wait_title = (
-                "请稍候"
-                if getattr(self._main.config, "language", "zh") == "zh"
-                else "Please Wait"
+                "请稍候" if getattr(self._main.config, "language", "zh") == "zh" else "Please Wait"
             )
-            InfoBar.info(
-                title=wait_title,
-                content="已有导出任务进行中"
+            self._show_info_bar(
+                "info",
+                wait_title,
+                "已有导出任务进行中"
                 if getattr(self._main.config, "language", "zh") == "zh"
                 else "Another export task is already running.",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
                 duration=2000,
-                parent=self,
             )
             return
 
@@ -491,6 +552,17 @@ class ResultPage(QWidget):
         if not path:
             return
 
+        self._current_task_id = str(
+            getattr(self._main, "active_task_id", "") or self._current_task_id
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="started",
+                message="export started",
+            )
+        )
         worker = ExportWorker(_create_apkg_exporter(), self._cards, Path(path))
         self._export_worker = worker
         self._export_button_states = {
@@ -505,6 +577,76 @@ class ResultPage(QWidget):
             f"正在导出 {len(self._cards)} 张卡片到 APKG"
             if is_zh
             else f"Exporting {len(self._cards)} cards to APKG"
+        )
+        worker.progress.connect(self._on_export_progress)
+        worker.finished.connect(self._on_export_done)
+        worker.error.connect(self._on_export_error)
+        worker.cancelled.connect(self._on_export_cancelled)
+        worker.start()
+
+    def _export_selected_apkg(self) -> None:
+        """导出选中的卡片为 APKG。"""
+        is_zh = getattr(self._main.config, "language", "zh") == "zh"
+
+        if not self._selected_indices:
+            self._show_info_bar(
+                "info",
+                "提示" if is_zh else "Info",
+                "请先选择要导出的卡片" if is_zh else "Please select cards to export",
+                duration=2000,
+            )
+            return
+
+        selected_cards = [
+            self._cards[i] for i in self._selected_indices if 0 <= i < len(self._cards)
+        ]
+        if not selected_cards:
+            return
+
+        if self._export_worker and self._export_worker.isRunning():
+            self._show_info_bar(
+                "info",
+                "请稍候" if is_zh else "Please Wait",
+                "已有导出任务进行中" if is_zh else "Another export task is already running.",
+                duration=2000,
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出所选为 APKG" if is_zh else "Export Selected as APKG",
+            "ankismart_selected.apkg",
+            "Anki Package (*.apkg)",
+        )
+        if not path:
+            return
+
+        self._current_task_id = str(
+            getattr(self._main, "active_task_id", "") or self._current_task_id
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="started",
+                message="export selected started",
+            )
+        )
+        worker = ExportWorker(_create_apkg_exporter(), selected_cards, Path(path))
+        self._export_worker = worker
+        self._export_button_states = {
+            "retry": self._btn_retry.isEnabled(),
+            "repush_all": self._btn_repush_all.isEnabled(),
+            "export": self._btn_export_apkg.isEnabled(),
+        }
+        self._btn_export_apkg.setEnabled(False)
+        self._btn_export_selected.setEnabled(False)
+        self._btn_retry.setEnabled(False)
+        self._btn_repush_all.setEnabled(False)
+        self._set_status_label(
+            f"正在导出 {len(selected_cards)} 张所选卡片到 APKG"
+            if is_zh
+            else f"Exporting {len(selected_cards)} selected cards to APKG"
         )
         worker.progress.connect(self._on_export_progress)
         worker.finished.connect(self._on_export_done)
@@ -546,6 +688,11 @@ class ResultPage(QWidget):
         title_label = card.findChild(CaptionLabel, "stat_title")
         if title_label:
             title_label.setText(title)
+
+    def _set_stat_card_color(self, card: CardWidget, color: str) -> None:
+        value_label = card.findChild(TitleLabel, "stat_value")
+        if value_label:
+            value_label.setStyleSheet(f"color: {color};")
 
     def showEvent(self, event: Any) -> None:  # noqa: N802
         """页面显示时刷新数据。"""
@@ -595,29 +742,23 @@ class ResultPage(QWidget):
         feedback_key = (result.trace_id or "", result.total, result.succeeded, result.failed)
         should_show_feedback = show_feedback and self._result_feedback_key != feedback_key
         if should_show_feedback and result.succeeded == result.total:
-            InfoBar.success(
-                title="推送成功" if is_zh else "Push Success",
-                content=f"成功推送 {result.succeeded} 张卡片"
+            self._show_info_bar(
+                "success",
+                "推送成功" if is_zh else "Push Success",
+                f"成功推送 {result.succeeded} 张卡片"
                 if is_zh
                 else f"Successfully pushed {result.succeeded} cards",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
                 duration=3000,
-                parent=self,
             )
             self._result_feedback_key = feedback_key
         elif should_show_feedback and result.failed > 0:
-            InfoBar.warning(
-                title="部分失败" if is_zh else "Partial Failure",
-                content=f"成功 {result.succeeded} 张，失败 {result.failed} 张"
+            self._show_info_bar(
+                "warning",
+                "部分失败" if is_zh else "Partial Failure",
+                f"成功 {result.succeeded} 张，失败 {result.failed} 张"
                 if is_zh
                 else f"Success {result.succeeded}, Failed {result.failed}",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
                 duration=5000,
-                parent=self,
             )
             self._result_feedback_key = feedback_key
 
@@ -642,15 +783,23 @@ class ResultPage(QWidget):
         # Card title (from first field)
         lang = getattr(self._main.config, "language", "zh")
         card_title = t("result.unknown_card", lang)
+        quality_text = ""
         if 0 <= status.index < len(cards):
             card = cards[status.index]
             card_title = self._extract_question_title(card, lang=lang)
+            quality_text = format_quality_flags(
+                list(getattr(card.metadata, "quality_flags", []) or []),
+                lang,
+            )
 
         title_item = QTableWidgetItem(card_title)
         self._table.setItem(row, 1, title_item)
 
         # Status with color
-        if status.success:
+        if status.success and quality_text:
+            status_text = "需关注" if lang == "zh" else "Needs Review"
+            status_color = "#E6A23C"
+        elif status.success:
             status_text = t("result.status_success", lang)
             status_color = "#67C23A"
         elif status.error:
@@ -667,7 +816,8 @@ class ResultPage(QWidget):
         self._table.setItem(row, 2, status_item)
 
         # Error message
-        error_item = QTableWidgetItem(status.error or "")
+        error_text = _format_status_message(status.error or "", lang) or quality_text
+        error_item = QTableWidgetItem(error_text)
         self._table.setItem(row, 3, error_item)
 
         # Edit button
@@ -742,9 +892,7 @@ class ResultPage(QWidget):
     def _on_push_card_progress(self, current: int, total: int) -> None:
         is_zh = getattr(self._main.config, "language", "zh") == "zh"
         self._set_status_label(
-            f"已完成 {current}/{total} 张卡片推送"
-            if is_zh
-            else f"Pushed {current}/{total} cards"
+            f"已完成 {current}/{total} 张卡片推送" if is_zh else f"Pushed {current}/{total} cards"
         )
 
     def _apply_duplicate_settings(self, cards: list[CardDraft]) -> None:
@@ -767,14 +915,11 @@ class ResultPage(QWidget):
         if not self._push_result or not self._cards:
             return
         if self._worker and self._worker.isRunning():
-            InfoBar.info(
-                title="请稍候" if is_zh else "Please Wait",
-                content="已有推送任务进行中" if is_zh else "Another push task is already running.",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
+            self._show_info_bar(
+                "info",
+                "请稍候" if is_zh else "Please Wait",
+                "已有推送任务进行中" if is_zh else "Another push task is already running.",
                 duration=2000,
-                parent=self,
             )
             return
 
@@ -785,14 +930,11 @@ class ResultPage(QWidget):
                 failed_cards.append(self._cards[status.index])
 
         if not failed_cards:
-            InfoBar.info(
-                title="提示" if is_zh else "Info",
-                content="没有失败的卡片需要重试" if is_zh else "No failed cards to retry",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
+            self._show_info_bar(
+                "info",
+                "提示" if is_zh else "Info",
+                "没有失败的卡片需要重试" if is_zh else "No failed cards to retry",
                 duration=2000,
-                parent=self,
             )
             return
 
@@ -823,16 +965,13 @@ class ResultPage(QWidget):
         )
         worker.start()
 
-        InfoBar.info(
-            title="重试中" if is_zh else "Retrying",
-            content=f"正在重试 {len(failed_cards)} 张失败卡片..."
+        self._show_info_bar(
+            "info",
+            "重试中" if is_zh else "Retrying",
+            f"正在重试 {len(failed_cards)} 张失败卡片..."
             if is_zh
             else f"Retrying {len(failed_cards)} failed cards...",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
             duration=2000,
-            parent=self,
         )
 
     def _on_retry_done(self, result: PushResult) -> None:
@@ -860,26 +999,18 @@ class ResultPage(QWidget):
             self._display_result(self._push_result, self._cards)
 
         if result.succeeded > 0:
-            InfoBar.success(
-                title="重试成功" if is_zh else "Retry Succeeded",
-                content=f"成功推送 {result.succeeded} 张卡片"
+            self._show_info_bar(
+                "success",
+                "重试成功" if is_zh else "Retry Succeeded",
+                f"成功推送 {result.succeeded} 张卡片"
                 if is_zh
                 else f"Successfully pushed {result.succeeded} cards",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
             )
         else:
-            InfoBar.error(
-                title="重试失败" if is_zh else "Retry Failed",
-                content="所有卡片重试失败" if is_zh else "All retries failed",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
+            self._show_info_bar(
+                "error",
+                "重试失败" if is_zh else "Retry Failed",
+                "所有卡片重试失败" if is_zh else "All retries failed",
             )
 
     def _on_retry_error(self, msg: str) -> None:
@@ -890,53 +1021,74 @@ class ResultPage(QWidget):
         self._btn_export_apkg.setEnabled(True)
         self._set_status_label(error_display["content"])
 
-        InfoBar.error(
-            title=error_display["title"],
-            content=error_display["content"],
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "error",
+            error_display["title"],
+            error_display["content"],
             duration=5000,
-            parent=self,
         )
 
     def _on_export_progress(self, message: str) -> None:
         self._set_status_label(message)
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="progress",
+                message=message,
+            )
+        )
 
     def _on_export_done(self, path: str) -> None:
         """导出完成回调。"""
         self._cleanup_export_worker()
         is_zh = getattr(self._main.config, "language", "zh") == "zh"
         self._restore_export_buttons()
-        self._set_status_label(
-            f"导出完成：{path}" if is_zh else f"Export completed: {path}"
-        )
+        self._set_status_label(f"导出完成：{path}" if is_zh else f"Export completed: {path}")
 
-        InfoBar.success(
-            title="导出成功" if is_zh else "Export Succeeded",
-            content=f"已导出到 {path}" if is_zh else f"Exported to {path}",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=3000,
-            parent=self,
+        self._show_info_bar(
+            "success",
+            "导出成功" if is_zh else "Export Succeeded",
+            f"已导出到 {path}" if is_zh else f"Exported to {path}",
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="completed",
+                progress=100,
+                message=path,
+            )
         )
 
     def _on_export_error(self, msg: str) -> None:
         """导出错误回调。"""
         self._cleanup_export_worker()
-        error_display = build_error_display(msg, getattr(self._main.config, "language", "zh"))
+        lang = getattr(self._main.config, "language", "zh")
+        friendly_message = _format_status_message(msg, lang)
+        if friendly_message != str(msg or "").strip():
+            error_display = {
+                "title": "导出失败" if lang == "zh" else "Export Failed",
+                "content": friendly_message,
+            }
+        else:
+            error_display = build_error_display(msg, lang)
         self._restore_export_buttons()
         self._set_status_label(error_display["content"])
 
-        InfoBar.error(
-            title=error_display["title"],
-            content=error_display["content"],
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "error",
+            error_display["title"],
+            error_display["content"],
             duration=5000,
-            parent=self,
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="failed",
+                message=error_display["content"],
+            )
         )
 
     def _on_export_cancelled(self) -> None:
@@ -944,6 +1096,21 @@ class ResultPage(QWidget):
         self._cleanup_export_worker()
         self._restore_export_buttons()
         self._set_status_label("导出已取消" if is_zh else "Export cancelled")
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="export",
+                kind="cancelled",
+                message="export cancelled",
+            )
+        )
+
+    def _publish_task_event(self, event: TaskEvent) -> None:
+        if not event.task_id:
+            return
+        publish = getattr(self._main, "publish_task_event", None)
+        if callable(publish):
+            publish(event)
 
     def _back_to_preview(self) -> None:
         """返回预览页面。"""
@@ -984,16 +1151,19 @@ class ResultPage(QWidget):
 
             # Enable repush button if there are edited cards
             self._btn_repush_all.setEnabled(True)
-
-            InfoBar.success(
-                title=t("card_edit.save_success", lang),
-                content="",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=2000,
-                parent=self,
+            quality_text = format_quality_flags(
+                list(getattr(edited_card.metadata, "quality_flags", []) or []),
+                lang,
             )
+            if quality_text:
+                self._show_info_bar(
+                    "warning",
+                    t("card_edit.save_success", lang),
+                    quality_text,
+                    duration=2500,
+                )
+            else:
+                self._show_info_bar("success", t("card_edit.save_success", lang), "", duration=2000)
 
     def _on_select_all_changed(self, state: int) -> None:
         """Handle select all checkbox state change."""
@@ -1045,6 +1215,7 @@ class ResultPage(QWidget):
         has_selection = len(self._selected_indices) > 0
         self._btn_batch_edit_tags.setEnabled(has_selection)
         self._btn_batch_edit_deck.setEnabled(has_selection)
+        self._btn_export_selected.setEnabled(has_selection)
 
     def _batch_edit_tags(self) -> None:
         """Open batch edit tags dialog."""
@@ -1079,14 +1250,11 @@ class ResultPage(QWidget):
                 self._cards[card_index].tags = tags_list
 
         lang = getattr(self._main.config, "language", "zh")
-        InfoBar.success(
-            title=t("result.batch_edit_success", lang),
-            content=t("result.batch_tags_updated", lang, count=len(self._selected_indices)),
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "success",
+            t("result.batch_edit_success", lang),
+            t("result.batch_tags_updated", lang, count=len(self._selected_indices)),
             duration=2000,
-            parent=self,
         )
 
     def _apply_batch_deck(self, new_deck: str) -> None:
@@ -1099,14 +1267,11 @@ class ResultPage(QWidget):
                 self._cards[card_index].deck_name = new_deck.strip()
 
         lang = getattr(self._main.config, "language", "zh")
-        InfoBar.success(
-            title=t("result.batch_edit_success", lang),
-            content=t("result.batch_deck_updated", lang, count=len(self._selected_indices)),
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "success",
+            t("result.batch_edit_success", lang),
+            t("result.batch_deck_updated", lang, count=len(self._selected_indices)),
             duration=2000,
-            parent=self,
         )
 
     def _refresh_table_row(self, card_index: int) -> None:
@@ -1132,25 +1297,19 @@ class ResultPage(QWidget):
         """Repush all cards to Anki."""
         is_zh = getattr(self._main.config, "language", "zh") == "zh"
         if not self._cards:
-            InfoBar.info(
-                title="提示" if is_zh else "Info",
-                content="没有卡片需要推送" if is_zh else "No cards to push",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
+            self._show_info_bar(
+                "info",
+                "提示" if is_zh else "Info",
+                "没有卡片需要推送" if is_zh else "No cards to push",
                 duration=2000,
-                parent=self,
             )
             return
         if self._worker and self._worker.isRunning():
-            InfoBar.info(
-                title="请稍候" if is_zh else "Please Wait",
-                content="已有推送任务进行中" if is_zh else "Another push task is already running.",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
+            self._show_info_bar(
+                "info",
+                "请稍候" if is_zh else "Please Wait",
+                "已有推送任务进行中" if is_zh else "Another push task is already running.",
                 duration=2000,
-                parent=self,
             )
             return
 
@@ -1176,22 +1335,17 @@ class ResultPage(QWidget):
         worker.finished.connect(self._on_repush_done)
         worker.error.connect(self._on_repush_error)
         self._set_status_label(
-            f"正在推送 {len(self._cards)} 张卡片"
-            if is_zh
-            else f"Pushing {len(self._cards)} cards"
+            f"正在推送 {len(self._cards)} 张卡片" if is_zh else f"Pushing {len(self._cards)} cards"
         )
         worker.start()
 
-        InfoBar.info(
-            title="推送中" if is_zh else "Pushing",
-            content=f"正在推送 {len(self._cards)} 张卡片..."
+        self._show_info_bar(
+            "info",
+            "推送中" if is_zh else "Pushing",
+            f"正在推送 {len(self._cards)} 张卡片..."
             if is_zh
             else f"Pushing {len(self._cards)} cards...",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
             duration=2000,
-            parent=self,
         )
 
     def _on_repush_done(self, result: PushResult) -> None:
@@ -1233,45 +1387,42 @@ class ResultPage(QWidget):
             self._display_result(self._push_result, self._cards)
 
         if result.succeeded > 0:
-            InfoBar.success(
-                title="推送成功" if is_zh else "Push Success",
-                content=f"成功推送 {result.succeeded} 张已编辑卡片"
+            self._show_info_bar(
+                "success",
+                "推送成功" if is_zh else "Push Success",
+                f"成功推送 {result.succeeded} 张已编辑卡片"
                 if is_zh
                 else f"Successfully pushed {result.succeeded} edited cards",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
             )
         else:
-            InfoBar.error(
-                title="推送失败" if is_zh else "Push Failed",
-                content="所有卡片推送失败" if is_zh else "All cards failed to push",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3000,
-                parent=self,
+            self._show_info_bar(
+                "error",
+                "推送失败" if is_zh else "Push Failed",
+                "所有卡片推送失败" if is_zh else "All cards failed to push",
             )
 
     def _on_repush_error(self, msg: str) -> None:
         """Callback when repush encounters an error."""
         self._cleanup_push_worker()
-        error_display = build_error_display(msg, getattr(self._main.config, "language", "zh"))
+        lang = getattr(self._main.config, "language", "zh")
+        friendly_message = _format_status_message(msg, lang)
+        if friendly_message != str(msg or "").strip():
+            error_display = {
+                "title": "推送失败" if lang == "zh" else "Push Failed",
+                "content": friendly_message,
+            }
+        else:
+            error_display = build_error_display(msg, lang)
         self._btn_repush_all.setEnabled(True)
         self._btn_retry.setEnabled(True)
         self._btn_export_apkg.setEnabled(True)
         self._set_status_label(error_display["content"])
 
-        InfoBar.error(
-            title=error_display["title"],
-            content=error_display["content"],
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
+        self._show_info_bar(
+            "error",
+            error_display["title"],
+            error_display["content"],
             duration=5000,
-            parent=self,
         )
 
     def retranslate_ui(self):
@@ -1354,9 +1505,7 @@ class ResultPage(QWidget):
 
     def update_theme(self):
         """Update theme-dependent components when theme changes."""
-        # ResultPage uses QFluentWidgets components that handle theme automatically
-        # No custom styling that needs manual updates
-        pass
+        self._set_stat_card_color(self._card_total, get_theme_accent_text_hex())
 
 
 class BatchEditTagsDialog(MessageBoxBase):

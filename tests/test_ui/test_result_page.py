@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication
+from qfluentwidgets import TitleLabel
 
 import ankismart.ui.result_page as result_page_module
 from ankismart.core.models import CardDraft, CardPushStatus, PushResult
@@ -107,7 +108,26 @@ def test_card_editor_get_cards_returns_edited():
     assert result[1].fields["Front"] == "Q2"
 
 
+def test_get_cards_reformats_basic_back_to_answer_explanation_block():
+    card = _make_card("什么是事务原子性？", "原子性。解析：要么全成要么全败。")
+    dialog = CardEditWidget.__new__(CardEditWidget)
+    dialog._cards = [card]
+    dialog._current_index = 0
+    dialog._field_editors = {
+        "Front": _FakePlainTextEdit("什么是事务原子性？"),
+        "Back": _FakePlainTextEdit("原子性。解析：要么全成要么全败。"),
+    }
+    dialog._list = _FakeListWidget(1)
+    dialog.cards_changed = _FakeSignal()
+
+    result = dialog.get_cards()
+
+    assert result[0].fields["Back"].startswith("答案:")
+    assert "解析:" in result[0].fields["Back"]
+
+
 # --- ResultPage update-mode combo tests ---
+
 
 @pytest.fixture(scope="session")
 def _qapp():
@@ -121,16 +141,20 @@ def _qapp():
 class _FakeMainWindow:
     def __init__(self):
         self.cards = []
-        self.config = type("C", (), {
-            "anki_connect_url": "",
-            "anki_connect_key": "",
-            "proxy_url": "",
-            "last_update_mode": None,
-            "allow_duplicate": False,
-            "duplicate_scope": "deck",
-            "duplicate_check_model": True,
-            "language": "zh",
-        })()
+        self.config = type(
+            "C",
+            (),
+            {
+                "anki_connect_url": "",
+                "anki_connect_key": "",
+                "proxy_url": "",
+                "last_update_mode": None,
+                "allow_duplicate": False,
+                "duplicate_scope": "deck",
+                "duplicate_check_model": True,
+                "language": "zh",
+            },
+        )()
 
 
 def test_update_combo_has_three_items(_qapp):
@@ -204,10 +228,16 @@ def test_retry_failed_returns_when_worker_running(_qapp, monkeypatch) -> None:
     )
     page._worker = _ThreadLikeWorker(running=True)
 
-    info_calls = []
+    info_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        ResultPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: info_calls.append((args, kwargs)),
+        raising=False,
+    )
     monkeypatch.setattr(
         "ankismart.ui.result_page.InfoBar.info",
-        lambda *args, **kwargs: info_calls.append(kwargs),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected direct infobar")),
     )
 
     def _fail_push_worker(*args, **kwargs):
@@ -218,6 +248,7 @@ def test_retry_failed_returns_when_worker_running(_qapp, monkeypatch) -> None:
     page._retry_failed()
 
     assert len(info_calls) == 1
+    assert info_calls[0][0][2] == "请稍候"
 
 
 def test_repush_all_returns_when_worker_running(_qapp, monkeypatch) -> None:
@@ -301,16 +332,48 @@ def test_load_result_only_shows_top_feedback_once(_qapp, monkeypatch) -> None:
         trace_id="trace-feedback-once",
     )
 
-    success_calls = []
+    success_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        ResultPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: success_calls.append((args, kwargs)),
+        raising=False,
+    )
     monkeypatch.setattr(
         "ankismart.ui.result_page.InfoBar.success",
-        lambda *args, **kwargs: success_calls.append(kwargs),
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected direct infobar")),
     )
 
     page.load_result(result, cards)
     page._refresh()
 
     assert len(success_calls) == 1
+    assert success_calls[0][0][1] == "success"
+
+
+def test_export_selected_apkg_without_selection_uses_page_infobar_helper(
+    _qapp, monkeypatch
+) -> None:
+    page = ResultPage(_FakeMainWindow())
+    page._cards = [_make_card()]
+    page._selected_indices = set()
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        ResultPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ankismart.ui.result_page.InfoBar.info",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected direct infobar")),
+    )
+
+    page._export_selected_apkg()
+
+    assert len(calls) == 1
+    assert calls[0][0][1] == "info"
 
 
 def test_export_apkg_uses_export_worker(monkeypatch, _qapp, tmp_path) -> None:
@@ -327,6 +390,7 @@ def test_export_apkg_uses_export_worker(monkeypatch, _qapp, tmp_path) -> None:
         "ankismart.ui.result_page._create_apkg_exporter",
         lambda: created.__setitem__("factory_called", True) or object(),
     )
+
     class _ExportWorkerStub:
         def __init__(self, exporter, cards, output_path):
             created["exporter"] = exporter
@@ -377,6 +441,41 @@ def test_create_apkg_exporter_supports_string_path_monkeypatch(monkeypatch, tmp_
     assert calls["path"] == output_path
 
 
+def test_export_error_publishes_failed_task_event(monkeypatch, _qapp) -> None:
+    page = ResultPage(_FakeMainWindow())
+    events = []
+
+    monkeypatch.setattr(page, "_publish_task_event", lambda event: events.append(event))
+    monkeypatch.setattr("ankismart.ui.result_page.InfoBar.error", lambda *args, **kwargs: None)
+    page._current_task_id = "task-result"
+
+    page._on_export_error("disk full")
+
+    assert events[-1].kind == "failed"
+    assert events[-1].stage == "export"
+
+
+def test_export_error_uses_page_infobar_helper(monkeypatch, _qapp) -> None:
+    page = ResultPage(_FakeMainWindow())
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        ResultPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ankismart.ui.result_page.InfoBar.error",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    page._on_export_error("disk full")
+
+    assert len(calls) == 1
+    assert calls[0][0][1] == "error"
+
+
 def test_retry_failed_updates_persistent_push_status(monkeypatch, _qapp) -> None:
     page = ResultPage(_FakeMainWindow())
     page._cards = [_make_card()]
@@ -405,7 +504,11 @@ def test_retry_failed_updates_persistent_push_status(monkeypatch, _qapp) -> None
     monkeypatch.setattr("ankismart.ui.result_page.AnkiConnectClient", lambda **kwargs: object())
     monkeypatch.setattr("ankismart.ui.result_page.AnkiGateway", lambda client: object())
     monkeypatch.setattr("ankismart.ui.result_page.PushWorker", _PushWorkerStub)
-    monkeypatch.setattr("ankismart.ui.result_page.InfoBar.info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ResultPage, "_show_info_bar", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        "ankismart.ui.result_page.InfoBar.info",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected direct infobar")),
+    )
 
     page._retry_failed()
 
@@ -419,8 +522,9 @@ def test_repush_all_uses_lazy_gateway_factory(monkeypatch, _qapp) -> None:
 
     monkeypatch.setattr(
         "ankismart.ui.result_page._create_push_gateway",
-        lambda config: created.__setitem__("gateway_calls", created["gateway_calls"] + 1)
-        or object(),
+        lambda config: (
+            created.__setitem__("gateway_calls", created["gateway_calls"] + 1) or object()
+        ),
     )
 
     class _PushWorkerStub:
@@ -446,6 +550,7 @@ def test_repush_all_uses_lazy_gateway_factory(monkeypatch, _qapp) -> None:
     assert created["gateway_calls"] == 1
     assert created["started"] is True
 
+
 def test_table_title_uses_question_field_only(_qapp) -> None:
     page = ResultPage(_FakeMainWindow())
     card = CardDraft(
@@ -463,3 +568,56 @@ def test_table_title_uses_question_field_only(_qapp) -> None:
     page._add_table_row(status, [card])
 
     assert page._table.item(0, 1).text().startswith("这是一条非常关键的问题文本")
+
+
+def test_result_page_shows_warning_style_for_cards_with_quality_flags(_qapp) -> None:
+    page = ResultPage(_FakeMainWindow())
+    card = _make_card("什么是事务原子性？", "答案: 原子性")
+    card.metadata.quality_flags = ["missing_explanation"]
+    status = CardPushStatus(index=0, success=True, error="")
+
+    page._add_table_row(status, [card])
+
+    assert page._table.item(0, 2).text() == "需关注"
+    assert "缺少解析" in page._table.item(0, 3).text()
+
+
+def test_result_page_total_stat_card_uses_theme_accent(_qapp, monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#123456")
+    page = ResultPage(_FakeMainWindow())
+    value_label = page._card_total.findChild(TitleLabel, "stat_value")
+
+    assert value_label is not None
+    assert "#123456" in value_label.styleSheet()
+
+
+def test_result_page_update_theme_refreshes_total_stat_card(_qapp, monkeypatch) -> None:
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#123456")
+    page = ResultPage(_FakeMainWindow())
+    value_label = page._card_total.findChild(TitleLabel, "stat_value")
+    assert value_label is not None
+
+    monkeypatch.setattr("ankismart.ui.result_page.get_theme_accent_text_hex", lambda **_: "#654321")
+    page.update_theme()
+
+    assert "#654321" in value_label.styleSheet()
+
+
+def test_result_page_displays_human_readable_blocking_reason_for_invalid_structure(
+    _qapp, monkeypatch
+) -> None:
+    page = ResultPage(_FakeMainWindow())
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(
+        ResultPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+
+    page._on_export_error("basic_missing_answer")
+
+    assert "缺少答案内容" in page._status_label.text()
+    assert len(calls) == 1
+    assert "缺少答案内容" in calls[0][0][3]

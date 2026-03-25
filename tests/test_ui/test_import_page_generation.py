@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QApplication
 
 from ankismart.core.config import AppConfig
+from ankismart.core.task_models import build_default_task_run
 from ankismart.ui.import_page import _STRATEGY_TEMPLATE_LIBRARY, ImportPage
 from ankismart.ui.utils import format_operation_hint
 from ankismart.ui.workflows import (
@@ -13,12 +18,15 @@ from ankismart.ui.workflows import (
 from .import_page_test_utils import (
     DummyCombo,
     DummyLineEdit,
+    DummyMain,
     DummyModeCombo,
     DummySlider,
     DummySwitch,
     make_page,
     patch_infobar,
 )
+
+_APP = QApplication.instance() or QApplication([])
 
 
 def test_build_generation_config_single_mode() -> None:
@@ -30,6 +38,49 @@ def test_build_generation_config_single_mode() -> None:
     assert config["target_total"] == 20
     assert config["auto_target_count"] is True
     assert config["strategy_mix"] == [{"strategy": "basic", "ratio": 100}]
+
+
+def test_start_convert_creates_pending_task_run(monkeypatch) -> None:
+    page = make_page()
+    page._file_paths = [Path("sample.md")]
+    page._cleanup_batch_worker = lambda: None
+    page._set_generate_actions_enabled = lambda _enabled: None
+    page._files_need_ocr = lambda: False
+    page._main.register_task = lambda task, activate=True: task
+    created: dict[str, object] = {}
+
+    def _create_task_run(flow: str):
+        task = build_default_task_run(flow=flow, task_id="task-import")
+        created["flow"] = flow
+        created["task"] = task
+        return task
+
+    class _SignalStub:
+        def connect(self, _callback) -> None:
+            return None
+
+    class _WorkerStub:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.file_progress = _SignalStub()
+            self.file_completed = _SignalStub()
+            self.file_warning = _SignalStub()
+            self.page_progress = _SignalStub()
+            self.ocr_progress = _SignalStub()
+            self.finished = _SignalStub()
+            self.error = _SignalStub()
+            self.cancelled = _SignalStub()
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr("ankismart.ui.import_page.save_config", lambda _config: None)
+    monkeypatch.setattr("ankismart.ui.import_page.BatchConvertWorker", _WorkerStub)
+    page._create_task_run = _create_task_run
+
+    ImportPage._start_convert(page)
+
+    assert created["flow"] == "full_pipeline"
+    assert getattr(page, "_current_task_id", "") == "task-import"
 
 
 def test_build_generation_config_mixed_mode() -> None:
@@ -164,7 +215,57 @@ def test_strategy_template_change_updates_sliders_immediately(monkeypatch):
     assert calls["success"] == []
 
 
-def test_apply_strategy_template_button_keeps_feedback(monkeypatch):
+def test_generation_preset_change_applies_immediately_without_feedback(monkeypatch):
+    page = make_page()
+    calls = patch_infobar(monkeypatch)
+    persisted: dict[str, object] = {}
+
+    class SwitchStub(DummySwitch):
+        def blockSignals(self, _blocked: bool) -> None:  # noqa: N802
+            return None
+
+    class PresetCombo:
+        def __init__(self) -> None:
+            self._data = ["default", "exam_dense"]
+            self._current = 1
+
+        def currentData(self) -> str:
+            return self._data[self._current]
+
+        def count(self) -> int:
+            return len(self._data)
+
+        def itemData(self, index: int) -> str:
+            return self._data[index]
+
+        def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+            self._current = index
+
+    page._generation_preset_combo = PresetCombo()
+    page._auto_target_count_switch = SwitchStub(True)
+    page._strategy_group_initialized = False
+    page._pending_generation_strategy_mix = None
+
+    def apply_runtime(config: AppConfig, *, persist: bool = True, changed_fields=None):
+        persisted["config"] = config
+        persisted["persist"] = persist
+        persisted["changed_fields"] = set(changed_fields or [])
+        page._main.config = config
+        return set(changed_fields or [])
+
+    page._main.apply_runtime_config = apply_runtime
+
+    ImportPage._on_generation_preset_changed(page)
+
+    assert page._total_count_input.text() == "24"
+    assert page._auto_target_count_switch.isChecked() is False
+    assert persisted["persist"] is True
+    assert persisted["changed_fields"] == {"generation_preset"}
+    assert persisted["config"].generation_preset == "exam_dense"
+    assert calls["success"] == []
+
+
+def test_strategy_template_change_keeps_no_feedback(monkeypatch):
     page = make_page()
     calls = patch_infobar(monkeypatch)
 
@@ -197,8 +298,7 @@ def test_apply_strategy_template_button_keeps_feedback(monkeypatch):
 
     ImportPage._apply_selected_strategy_template(page)
 
-    assert len(calls["success"]) == 1
-    assert "语言记忆" in calls["success"][0]["content"]
+    assert calls["success"] == []
 
 
 def test_cloud_ocr_page_progress_updates_progress_bar(monkeypatch):
@@ -240,6 +340,79 @@ def test_cloud_ocr_page_progress_updates_progress_bar(monkeypatch):
 
     ImportPage._on_page_progress(page, "sample.pdf", 3, 3)
     assert page._progress_bar.value() == 100
+
+
+def test_ocr_download_finished_uses_page_infobar_helper(monkeypatch):
+    page = make_page()
+    page._model_check_in_progress = True
+    page._last_ocr_progress_message = ""
+    calls: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(page, "_set_generate_actions_enabled", lambda enabled: None)
+    monkeypatch.setattr(page, "_cleanup_ocr_download_worker", lambda: None)
+    monkeypatch.setattr(
+        ImportPage,
+        "_show_info_bar",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ankismart.ui.import_page.InfoBar.success",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    ImportPage._on_ocr_download_finished(page, ["model-a"])
+
+    assert len(calls) == 1
+    assert calls[0][0][1] == "success"
+
+
+def test_on_file_completed_excludes_md_docx_from_preview_pending_progress() -> None:
+    page = make_page()
+    preview_calls: list[int] = []
+    preview_page = SimpleNamespace(
+        isVisible=lambda: True,
+        add_converted_document=lambda document: None,
+        update_converting_status=lambda pending: preview_calls.append(pending),
+    )
+    page._main.batch_result = SimpleNamespace(documents=[])
+    page._main.preview_page = preview_page
+    page._file_status = {
+        "D:/docs/a.md": "completed",
+        "D:/docs/b.docx": "pending",
+    }
+    page._refresh_file_item_colors = lambda: None
+    page._file_name_to_keys = {
+        "a.md": ["D:/docs/a.md"],
+        "b.docx": ["D:/docs/b.docx"],
+    }
+
+    ImportPage._on_file_completed(
+        page,
+        "a.md",
+        SimpleNamespace(
+            file_name="a.md",
+            result=SimpleNamespace(source_path="D:/docs/a.md"),
+        ),
+    )
+
+    assert preview_calls == [0]
+
+
+def test_import_page_close_event_disposes_progress_infobar() -> None:
+    page = ImportPage(DummyMain())
+    progress_closed = {"value": False}
+
+    page._progress_info_bar = type(
+        "_InfoBar",
+        (),
+        {"close": lambda self: progress_closed.__setitem__("value", True)},
+    )()
+
+    page.closeEvent(QCloseEvent())
+
+    assert progress_closed["value"] is True
+    assert page._progress_info_bar is None
 
 
 def test_cloud_ocr_message_progress_updates_status_text():

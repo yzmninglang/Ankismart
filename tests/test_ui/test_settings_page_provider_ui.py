@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import BodyLabel, ExpandGroupSettingCard, PrimaryPushButton, PushButton
 
 from ankismart.core.config import AppConfig, LLMProviderConfig
@@ -7,7 +9,13 @@ from ankismart.ui.settings_page import SettingsPage
 
 from .settings_page_test_utils import make_main
 
-pytest_plugins = ["tests.test_ui.settings_page_test_utils"]
+
+@pytest.fixture(scope="session", name="_qapp")
+def _qapp_fixture():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
 
 
 def _build_settings_page_with_providers(
@@ -105,8 +113,12 @@ def test_provider_ui_uses_english_copy_for_empty_fields(_qapp) -> None:
 
 def test_provider_list_card_renders_one_group_per_provider(_qapp) -> None:
     providers = [
-        LLMProviderConfig(id="p1", name="Vendor-X", model="model-a", base_url="https://a.example/v1"),
-        LLMProviderConfig(id="p2", name="Vendor-Y", model="model-b", base_url="https://b.example/v1"),
+        LLMProviderConfig(
+            id="p1", name="Vendor-X", model="model-a", base_url="https://a.example/v1"
+        ),
+        LLMProviderConfig(
+            id="p2", name="Vendor-Y", model="model-b", base_url="https://b.example/v1"
+        ),
     ]
     page = _build_settings_page_with_providers(_qapp, providers, active_provider_id="p1")
 

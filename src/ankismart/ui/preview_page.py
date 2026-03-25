@@ -4,7 +4,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PyQt6.QtWidgets import QHBoxLayout, QListWidget, QVBoxLayout, QWidget
 from qfluentwidgets import (
@@ -12,11 +12,9 @@ from qfluentwidgets import (
     IndeterminateProgressBar,
     InfoBar,
     InfoBarPosition,
-    MessageBox,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
-    StateToolTip,
     isDarkTheme,
 )
 
@@ -25,7 +23,8 @@ from ankismart.anki_gateway.gateway import AnkiGateway
 from ankismart.core.config import append_task_history, record_operation_metric, save_config
 from ankismart.core.errors import ErrorCode
 from ankismart.core.logging import get_logger
-from ankismart.core.models import BatchConvertResult, ConvertedDocument
+from ankismart.core.models import BatchConvertResult, ConvertedDocument, RegenerateRequest
+from ankismart.core.task_models import build_default_task_run
 from ankismart.ui.error_handler import build_error_display
 from ankismart.ui.shortcuts import ShortcutKeys, create_shortcut, get_shortcut_text
 from ankismart.ui.styles import (
@@ -34,9 +33,11 @@ from ankismart.ui.styles import (
     apply_page_title_style,
     get_display_scale,
     get_list_widget_palette,
+    get_theme_accent_text_hex,
     scale_px,
 )
-from ankismart.ui.utils import ProgressMixin, split_tags_text
+from ankismart.ui.task_runtime import TaskEvent
+from ankismart.ui.utils import ProgressMixin, request_infobar_confirmation, split_tags_text
 from ankismart.ui.workers import BatchGenerateWorker, PushWorker
 
 if TYPE_CHECKING:
@@ -67,10 +68,11 @@ class MarkdownHighlighter(QSyntaxHighlighter):
         """Setup highlighting rules for Markdown syntax based on current theme."""
         self._rules.clear()
         is_dark = isDarkTheme()
+        accent = get_theme_accent_text_hex(dark=is_dark)
 
         # Heading format
         heading_fmt = QTextCharFormat()
-        heading_fmt.setForeground(QColor("#D1D5DB" if is_dark else "#0078D4"))
+        heading_fmt.setForeground(QColor(accent))
         heading_fmt.setFontWeight(QFont.Weight.Bold)
         self._rules.append((re.compile(r"^#{1,6}\s+.*$", re.MULTILINE), heading_fmt))
 
@@ -94,7 +96,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # Link format
         link_fmt = QTextCharFormat()
-        link_fmt.setForeground(QColor("#C5CCD6" if is_dark else "#0366D6"))
+        link_fmt.setForeground(QColor(accent))
         link_fmt.setFontUnderline(True)
         self._rules.append((re.compile(r"\[([^\]]+)\]\(([^)]+)\)"), link_fmt))
 
@@ -110,7 +112,7 @@ class MarkdownHighlighter(QSyntaxHighlighter):
 
         # List format
         list_fmt = QTextCharFormat()
-        list_fmt.setForeground(QColor("#C8CFD9" if is_dark else "#005A9E"))
+        list_fmt.setForeground(QColor(accent))
         self._rules.append((re.compile(r"^[\*\-\+]\s+.*$", re.MULTILINE), list_fmt))
         self._rules.append((re.compile(r"^\d+\.\s+.*$", re.MULTILINE), list_fmt))
 
@@ -147,12 +149,15 @@ class PreviewPage(ProgressMixin, QWidget):
         self._generate_worker = None
         self._push_worker = None
         self._sample_worker = None
-        self._state_tooltip = None
+        self._progress_info_bar = None
         self._converting_info_bar = None  # InfoBar for conversion status
         self._pending_files_count = 0  # Track pending files
         self._ready_documents: set[str] = set()  # Track ready document names
         self._total_expected_docs = 0  # Total expected documents
         self._generation_start_ts = 0.0
+        self._current_task_id = ""
+        self._pending_regenerate_request: RegenerateRequest | None = None
+        self._confirmations: dict[str, float] = {}
 
         self._setup_ui()
         self._init_shortcuts()
@@ -352,6 +357,7 @@ class PreviewPage(ProgressMixin, QWidget):
             total_expected: Total expected number of documents
         """
         self._documents = list(batch_result.documents)
+        self._current_task_id = str(getattr(self._main, "active_task_id", "") or "")
         self._edited_content.clear()
         self._current_index = -1
         self._pending_files_count = pending_files_count
@@ -448,7 +454,11 @@ class PreviewPage(ProgressMixin, QWidget):
         self._save_current_edit()
 
         result = []
+        regenerate_request = self.__dict__.get("_pending_regenerate_request")
+        allowed_documents = set(getattr(regenerate_request, "source_documents", []) or [])
         for i, doc in enumerate(self._documents):
+            if allowed_documents and doc.file_name not in allowed_documents:
+                continue
             if i in self._edited_content:
                 # Create new document with edited content
                 new_doc = ConvertedDocument(
@@ -462,27 +472,24 @@ class PreviewPage(ProgressMixin, QWidget):
         return result
 
     def _show_converting_info_bar(self, pending_count: int):
-        """Show info bar indicating files are still being converted."""
+        """Show info bar indicating files are still being converted with detailed progress."""
         if self._converting_info_bar is not None:
-            # Update existing info bar
-            is_zh = self._main.config.language == "zh"
-            content = (
-                f"还有 {pending_count} 个文件正在转换中，请稍候..."
-                if is_zh
-                else f"{pending_count} file(s) still converting, please wait..."
-            )
             # InfoBar doesn't have update method, so we need to close and recreate
             self._converting_info_bar.close()
             self._converting_info_bar = None
 
         is_zh = self._main.config.language == "zh"
+        completed_count = len(self._ready_documents)
+        total_count = self._total_expected_docs
+
         title = "文件转换中" if is_zh else "Converting Files"
         content = (
-            f"还有 {pending_count} 个文件正在转换中，转换完成后才能开始制作卡片"
+            f"已完成 {completed_count}/{total_count} 个文件，"
+            f"还有 {pending_count} 个文件正在转换中，请稍候..."
             if is_zh
             else (
-                f"{pending_count} file(s) still converting. "
-                "Card generation will be available after conversion completes."
+                f"Completed {completed_count}/{total_count} files. "
+                f"{pending_count} file(s) still converting, please wait..."
             )
         )
 
@@ -510,8 +517,11 @@ class PreviewPage(ProgressMixin, QWidget):
             self._hide_converting_info_bar()
             self._btn_generate.setEnabled(True)
         else:
-            pending = self._total_expected_docs - len(self._ready_documents)
-            self._show_converting_info_bar(pending)
+            pending = max(0, int(self._pending_files_count))
+            if pending > 0:
+                self._show_converting_info_bar(pending)
+            else:
+                self._hide_converting_info_bar()
             self._btn_generate.setEnabled(False)
 
         self._btn_save.setEnabled(True)
@@ -569,19 +579,37 @@ class PreviewPage(ProgressMixin, QWidget):
         # Update UI state
         self._update_ui_state()
 
-        # Show completion notification
-        is_zh = self._main.config.language == "zh"
-        InfoBar.success(
-            title="文档就绪" if is_zh else "Document Ready",
-            content=f"{document.file_name} 已转换完成"
-            if is_zh
-            else f"{document.file_name} converted",
-            orient=Qt.Orientation.Horizontal,
-            isClosable=True,
-            position=InfoBarPosition.TOP,
-            duration=2000,
-            parent=self,
-        )
+        if (
+            self._total_expected_docs <= 1
+            or len(self._ready_documents) >= self._total_expected_docs
+        ):
+            is_zh = self._main.config.language == "zh"
+            content = (
+                (
+                    f"{len(self._ready_documents)}/{self._total_expected_docs} "
+                    "个文件已就绪，可开始生成卡片"
+                )
+                if is_zh and self._total_expected_docs > 1
+                else (
+                    f"{len(self._ready_documents)}/{self._total_expected_docs} documents ready. "
+                    "You can start generation now."
+                    if self._total_expected_docs > 1
+                    else (
+                        f"{document.file_name} 已转换完成"
+                        if is_zh
+                        else f"{document.file_name} converted"
+                    )
+                )
+            )
+            InfoBar.success(
+                title="文档就绪" if is_zh else "Document Ready",
+                content=content,
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                position=InfoBarPosition.TOP,
+                duration=2200,
+                parent=self,
+            )
 
     def _on_generate_cards(self):
         """Handle generate cards button click."""
@@ -621,6 +649,7 @@ class PreviewPage(ProgressMixin, QWidget):
 
         # Build documents with edits
         documents = self._build_documents()
+        self._pending_regenerate_request = None
         if not documents:
             InfoBar.warning(
                 title="警告" if self._main.config.language == "zh" else "Warning",
@@ -675,6 +704,17 @@ class PreviewPage(ProgressMixin, QWidget):
         # Start generation worker
         self._cleanup_generate_worker()
         self._generation_start_ts = time.monotonic()
+        self._current_task_id = str(
+            getattr(self._main, "active_task_id", "") or self._current_task_id
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="started",
+                message="generation started",
+            )
+        )
         self._generate_worker = BatchGenerateWorker(
             documents=documents,
             generation_config=generation_config,
@@ -796,9 +836,10 @@ class PreviewPage(ProgressMixin, QWidget):
             )
             return
 
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在生成样本卡片" if is_zh else "Generating Sample Cards",
             "正在调用模型，请稍候" if is_zh else "Calling model, please wait",
+            duration=-1,
         )
 
         # Generate sample cards in background
@@ -882,10 +923,7 @@ class PreviewPage(ProgressMixin, QWidget):
         except Exception as e:
             self._update_ui_state()
             self._set_sample_preview_enabled(True)
-            self._finish_state_tooltip(
-                False,
-                "样本卡片生成失败" if is_zh else "Sample generation failed",
-            )
+            self._clear_progress_info_bar()
             InfoBar.error(
                 title="错误" if is_zh else "Error",
                 content=f"样本生成初始化失败：{e}"
@@ -906,10 +944,7 @@ class PreviewPage(ProgressMixin, QWidget):
         is_zh = self._main.config.language == "zh"
 
         if not cards:
-            self._finish_state_tooltip(
-                False,
-                "样本卡片生成失败" if is_zh else "Sample generation failed",
-            )
+            self._clear_progress_info_bar()
             InfoBar.warning(
                 title="警告" if is_zh else "Warning",
                 content="未能生成样本卡片" if is_zh else "Failed to generate sample cards",
@@ -921,10 +956,7 @@ class PreviewPage(ProgressMixin, QWidget):
             )
             return
 
-        self._finish_state_tooltip(
-            True,
-            "样本卡片生成完成" if is_zh else "Sample generation completed",
-        )
+        self._clear_progress_info_bar()
 
         # Show sample cards in a dialog
         from PyQt6.QtWidgets import QDialog, QTextEdit, QVBoxLayout
@@ -988,10 +1020,7 @@ class PreviewPage(ProgressMixin, QWidget):
         self._set_sample_preview_enabled(True)
         is_zh = self._main.config.language == "zh"
         error_display = build_error_display(error, self._main.config.language)
-        self._finish_state_tooltip(
-            False,
-            "样本卡片生成失败" if is_zh else "Sample generation failed",
-        )
+        self._clear_progress_info_bar()
         InfoBar.error(
             title=error_display["title"],
             content=f"生成样本卡片失败：{error_display['content']}"
@@ -1023,76 +1052,27 @@ class PreviewPage(ProgressMixin, QWidget):
             parent=self,
         )
 
-    def _show_state_tooltip(self, title: str, content: str) -> None:
-        """Show or update workflow state tooltip."""
-        if self._state_tooltip is None:
-            self._state_tooltip = StateToolTip(title, content, self.window())
-            self._configure_state_tooltip(self._state_tooltip)
-            self._state_tooltip.show()
-            return
+    def _show_progress_info_bar(self, title: str, content: str, duration: int = 1800):
+        """Show a single progress infobar instead of popup tooltip windows."""
+        current = self.__dict__.get("_progress_info_bar")
+        if current is not None and hasattr(current, "close"):
+            current.close()
 
-        self._state_tooltip.setContent(content)
-        self._configure_state_tooltip(self._state_tooltip)
+        self.__dict__["_progress_info_bar"] = InfoBar.info(
+            title=title,
+            content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=False,
+            position=InfoBarPosition.TOP,
+            duration=duration,
+            parent=self,
+        )
 
-    def _configure_state_tooltip(self, tooltip: StateToolTip) -> None:
-        window = self.window() or self
-        base_width = max(window.width(), self.width())
-        max_width = min(820, max(440, base_width - 96))
-        preferred_width = min(max_width, max(520, int(base_width * 0.42)))
-        min_height = 132
-
-        set_max_width = getattr(tooltip, "setMaximumWidth", None)
-        if callable(set_max_width):
-            set_max_width(max_width)
-
-        set_min_width = getattr(tooltip, "setMinimumWidth", None)
-        if callable(set_min_width):
-            set_min_width(preferred_width)
-
-        set_min_height = getattr(tooltip, "setMinimumHeight", None)
-        if callable(set_min_height):
-            set_min_height(min_height)
-
-        for label_name in ("titleLabel", "contentLabel"):
-            label = getattr(tooltip, label_name, None)
-            if label is None:
-                continue
-            set_word_wrap = getattr(label, "setWordWrap", None)
-            if callable(set_word_wrap):
-                set_word_wrap(True)
-            label_set_max_width = getattr(label, "setMaximumWidth", None)
-            if callable(label_set_max_width):
-                label_set_max_width(max_width - 32)
-
-        adjust_size = getattr(tooltip, "adjustSize", None)
-        if callable(adjust_size):
-            adjust_size()
-
-        tooltip_width = preferred_width
-        size_hint = getattr(tooltip, "sizeHint", None)
-        if callable(size_hint):
-            hint = size_hint()
-            hint_width = getattr(hint, "width", None)
-            if callable(hint_width):
-                tooltip_width = min(max_width, max(preferred_width, hint_width()))
-
-        move = getattr(tooltip, "move", None)
-        if callable(move):
-            x = max(24, window.width() - tooltip_width - 56)
-            move(QPoint(x, 36))
-
-    def _finish_state_tooltip(self, success: bool, content: str) -> None:
-        """Finish workflow state tooltip and clear reference."""
-        if self._state_tooltip is None:
-            return
-
-        tooltip = self._state_tooltip
-        tooltip.setContent(content)
-        self._configure_state_tooltip(tooltip)
-        tooltip.setState(success)
-        self._state_tooltip = None
-        if hasattr(tooltip, "deleteLater"):
-            tooltip.deleteLater()
+    def _clear_progress_info_bar(self) -> None:
+        current = self.__dict__.get("_progress_info_bar")
+        self.__dict__["_progress_info_bar"] = None
+        if current is not None and hasattr(current, "close"):
+            current.close()
 
     def _normalize_generation_message(self, message: str) -> str:
         """Localize strategy IDs and wrap long tooltip messages."""
@@ -1169,13 +1149,21 @@ class PreviewPage(ProgressMixin, QWidget):
         """Handle generation progress message."""
         is_zh = self._main.config.language == "zh"
         normalized = self._normalize_generation_message(message)
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在生成卡片" if is_zh else "Generating Cards",
             normalized,
         )
         logger.info(
             "generation progress",
             extra={"event": "ui.generation.progress", "message_detail": normalized},
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="progress",
+                message=normalized,
+            )
         )
 
     def _on_card_progress(self, current: int, total: int):
@@ -1184,9 +1172,19 @@ class PreviewPage(ProgressMixin, QWidget):
             return
 
         is_zh = self._main.config.language == "zh"
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在生成卡片" if is_zh else "Generating Cards",
             f"已生成 {current}/{total} 张卡片" if is_zh else f"Generated {current}/{total} cards",
+        )
+        progress = int((current / total) * 100) if total > 0 else 0
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="progress",
+                progress=progress,
+                message=f"{current}/{total}",
+            )
         )
 
     def _on_document_completed(self, document_name: str, cards_count: int):
@@ -1207,6 +1205,14 @@ class PreviewPage(ProgressMixin, QWidget):
     def _on_generation_warning(self, message: str):
         """Show non-blocking generation warnings without interrupting the workflow."""
         is_zh = self._main.config.language == "zh"
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="warning",
+                message=message,
+            )
+        )
         InfoBar.warning(
             title="生成提示" if is_zh else "Generation Notice",
             content=message,
@@ -1226,16 +1232,21 @@ class PreviewPage(ProgressMixin, QWidget):
             if self._generation_start_ts
             else 0.0
         )
-        self._finish_state_tooltip(
-            True,
-            "卡片生成完成" if is_zh else "Card generation completed",
-        )
+        self._clear_progress_info_bar()
         self._hide_progress()
         self._btn_generate.setEnabled(True)
         self._btn_save.setEnabled(True)
         self._set_sample_preview_enabled(True)
 
         if not cards:
+            self._publish_task_event(
+                TaskEvent(
+                    task_id=self._current_task_id,
+                    stage="generate",
+                    kind="failed",
+                    message="no cards generated",
+                )
+            )
             InfoBar.warning(
                 title="警告" if is_zh else "Warning",
                 content="没有生成任何卡片" if is_zh else "No cards generated",
@@ -1271,6 +1282,15 @@ class PreviewPage(ProgressMixin, QWidget):
             },
         )
         save_config(self._main.config)
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="completed",
+                progress=100,
+                message=f"generated {len(cards)} cards",
+            )
+        )
 
         InfoBar.success(
             title="制卡完成" if is_zh else "Generation Complete",
@@ -1318,7 +1338,6 @@ class PreviewPage(ProgressMixin, QWidget):
     def _on_generation_error(self, error: str):
         """Handle generation error."""
         self._cleanup_generate_worker()
-        is_zh = self._main.config.language == "zh"
         elapsed = (
             max(0.0, time.monotonic() - self._generation_start_ts)
             if self._generation_start_ts
@@ -1328,10 +1347,7 @@ class PreviewPage(ProgressMixin, QWidget):
         title = error_display["title"]
         message = error_display["content"]
 
-        self._finish_state_tooltip(
-            False,
-            "卡片生成失败" if is_zh else "Card generation failed",
-        )
+        self._clear_progress_info_bar()
         self._hide_progress()
         self._btn_generate.setEnabled(True)
         self._btn_save.setEnabled(True)
@@ -1357,6 +1373,14 @@ class PreviewPage(ProgressMixin, QWidget):
             payload={"duration_seconds": round(elapsed, 2)},
         )
         save_config(self._main.config)
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="failed",
+                message=message,
+            )
+        )
 
     def _on_generation_cancelled(self):
         """Handle generation cancellation."""
@@ -1367,10 +1391,7 @@ class PreviewPage(ProgressMixin, QWidget):
             if self._generation_start_ts
             else 0.0
         )
-        self._finish_state_tooltip(
-            False,
-            "已取消生成任务" if is_zh else "Generation cancelled",
-        )
+        self._clear_progress_info_bar()
         self._hide_progress()
         self._btn_generate.setEnabled(True)
         self._btn_save.setEnabled(True)
@@ -1400,29 +1421,43 @@ class PreviewPage(ProgressMixin, QWidget):
             error_code="cancelled",
         )
         save_config(self._main.config)
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="generate",
+                kind="cancelled",
+                message="generation cancelled",
+            )
+        )
 
     def _cancel_generation(self):
         """Cancel the current generation operation."""
         if self._generate_worker and self._generate_worker.isRunning():
-            w = MessageBox(
-                "确认取消" if self._main.config.language == "zh" else "Confirm Cancel",
-                "确定要取消卡片生成吗？"
-                if self._main.config.language == "zh"
-                else "Are you sure you want to cancel card generation?",
+            is_zh = self._main.config.language == "zh"
+            if not request_infobar_confirmation(
                 self,
-            )
-            if w.exec():
-                self._generate_worker.cancel()
+                self._confirmations,
+                key="cancel_generate",
+                title="再次点击取消" if is_zh else "Click Again to Cancel",
+                content="再次点击取消生成任务"
+                if is_zh
+                else "Click cancel again to stop generation",
+            ):
+                return
+            self._generate_worker.cancel()
         elif self._push_worker and self._push_worker.isRunning():
-            w = MessageBox(
-                "确认取消" if self._main.config.language == "zh" else "Confirm Cancel",
-                "确定要取消推送操作吗？"
-                if self._main.config.language == "zh"
-                else "Are you sure you want to cancel push operation?",
+            is_zh = self._main.config.language == "zh"
+            if not request_infobar_confirmation(
                 self,
-            )
-            if w.exec():
-                self._push_worker.cancel()
+                self._confirmations,
+                key="cancel_push",
+                title="再次点击取消" if is_zh else "Click Again to Cancel",
+                content="再次点击取消推送任务"
+                if is_zh
+                else "Click cancel again to stop pushing",
+            ):
+                return
+            self._push_worker.cancel()
 
     def _start_push(self, cards):
         """Start pushing cards to Anki."""
@@ -1454,6 +1489,14 @@ class PreviewPage(ProgressMixin, QWidget):
 
         # Start push worker
         self._cleanup_push_worker()
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="started",
+                message="push started",
+            )
+        )
         self._push_worker = PushWorker(
             gateway=gateway,
             cards=cards,
@@ -1469,27 +1512,42 @@ class PreviewPage(ProgressMixin, QWidget):
     def _on_push_progress(self, message: str):
         """Handle push progress message."""
         is_zh = self._main.config.language == "zh"
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在推送到 Anki" if is_zh else "Pushing to Anki",
             message,
+        )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="progress",
+                message=message,
+            )
         )
 
     def _on_push_card_progress(self, current: int, total: int):
         """Handle per-card push progress."""
         is_zh = self._main.config.language == "zh"
-        self._show_state_tooltip(
+        self._show_progress_info_bar(
             "正在推送到 Anki" if is_zh else "Pushing to Anki",
             f"已完成 {current}/{total}" if is_zh else f"Completed {current}/{total}",
+        )
+        progress = int((current / total) * 100) if total > 0 else 0
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="progress",
+                progress=progress,
+                message=f"{current}/{total}",
+            )
         )
 
     def _on_push_finished(self, result):
         """Handle push completion."""
         self._cleanup_push_worker()
         is_zh = self._main.config.language == "zh"
-        self._finish_state_tooltip(
-            True,
-            "推送完成" if is_zh else "Push completed",
-        )
+        self._clear_progress_info_bar()
         self._hide_progress()
         self._btn_generate.setEnabled(True)
         self._btn_save.setEnabled(True)
@@ -1512,16 +1570,21 @@ class PreviewPage(ProgressMixin, QWidget):
             duration=3200,
             parent=self,
         )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="completed",
+                progress=100,
+                message=f"push finished: {result.succeeded}/{result.total}",
+            )
+        )
 
     def _on_push_error(self, error: str):
         """Handle push error."""
         self._cleanup_push_worker()
-        is_zh = self._main.config.language == "zh"
         error_display = build_error_display(error, self._main.config.language)
-        self._finish_state_tooltip(
-            False,
-            "推送失败" if is_zh else "Push failed",
-        )
+        self._clear_progress_info_bar()
         self._hide_progress()
         self._btn_generate.setEnabled(True)
         self._btn_save.setEnabled(True)
@@ -1535,14 +1598,27 @@ class PreviewPage(ProgressMixin, QWidget):
             duration=5000,
             parent=self,
         )
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="failed",
+                message=error_display["content"],
+            )
+        )
 
     def _on_push_cancelled(self):
         """Handle push cancellation."""
         self._cleanup_push_worker()
         is_zh = self._main.config.language == "zh"
-        self._finish_state_tooltip(
-            False,
-            "推送已取消" if is_zh else "Push cancelled",
+        self._clear_progress_info_bar()
+        self._publish_task_event(
+            TaskEvent(
+                task_id=self._current_task_id,
+                stage="push",
+                kind="cancelled",
+                message="push cancelled",
+            )
         )
         self._hide_progress()
         self._btn_generate.setEnabled(True)
@@ -1558,6 +1634,21 @@ class PreviewPage(ProgressMixin, QWidget):
             duration=3000,
             parent=self,
         )
+
+    def _publish_task_event(self, event: TaskEvent) -> None:
+        if not event.task_id:
+            return
+        publish = getattr(self._main, "publish_task_event", None)
+        if callable(publish):
+            publish(event)
+
+    def start_regenerate_request(self, request: RegenerateRequest) -> None:
+        self._pending_regenerate_request = request
+        register_task = getattr(self._main, "register_task", None)
+        if callable(register_task):
+            task = register_task(build_default_task_run(flow="full_pipeline"), activate=True)
+            self._current_task_id = task.task_id
+        self._on_generate_cards()
 
     def retranslate_ui(self):
         """Retranslate UI elements when language changes."""
@@ -1604,7 +1695,6 @@ class PreviewPage(ProgressMixin, QWidget):
         self._cleanup_generate_worker()
         self._cleanup_push_worker()
         self._cleanup_sample_worker()
-        if self._state_tooltip is not None and hasattr(self._state_tooltip, "deleteLater"):
-            self._state_tooltip.deleteLater()
-            self._state_tooltip = None
+        self._clear_progress_info_bar()
+        self._hide_converting_info_bar()
         super().closeEvent(event)
