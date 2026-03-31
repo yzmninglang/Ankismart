@@ -68,6 +68,7 @@ class TestGetModel:
     def test_choice_formatter_script_is_latex_aware(self) -> None:
         assert "containsLatex" in _CHOICE_FORMATTER_SCRIPT
         assert "mathRe" in _CHOICE_FORMATTER_SCRIPT
+        assert "decodeHtmlEntities" in _CHOICE_FORMATTER_SCRIPT
         assert "var labeled = text.match" in _CHOICE_FORMATTER_SCRIPT
         assert "normalizedLines.length >= 2" not in _CHOICE_FORMATTER_SCRIPT
 

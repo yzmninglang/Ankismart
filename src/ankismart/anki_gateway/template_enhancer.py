@@ -19,14 +19,22 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
       .replace(/'/g, "&#39;");
   }
 
+  function decodeHtmlEntities(text) {
+    var decoder = document.createElement("textarea");
+    decoder.innerHTML = String(text || "");
+    return decoder.value;
+  }
+
   function extractText(html) {
-    return String(html || "")
+    return decodeHtmlEntities(
+      String(html || "")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/p\s*>/gi, "\n")
       .replace(/<[^>]+>/g, " ")
       .replace(/\u00a0/g, " ")
       .replace(/\r/g, "")
-      .trim();
+      .trim()
+    );
   }
 
   function escapeRegExp(text) {

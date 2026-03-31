@@ -8,6 +8,7 @@ from ankismart.anki_gateway.gateway import (
     AnkiGateway,
     _card_to_note_params,
 )
+from ankismart.anki_gateway.template_enhancer import TEMPLATE_ENHANCER_SCRIPT
 from ankismart.core.errors import AnkiGatewayError, ErrorCode
 from ankismart.core.models import (
     CardDraft,
@@ -106,8 +107,13 @@ class TestCardToNoteParams:
     def test_template_script_is_latex_aware(self) -> None:
         assert "containsLatex" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "mathRe" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
+        assert "decodeHtmlEntities" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "var labeled = text.match" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "normalizedLines.length >= 2" not in _ANKI_TEMPLATE_FORMATTER_SCRIPT
+
+    def test_template_enhancer_decodes_html_entities_before_rendering(self) -> None:
+        assert "decodeHtmlEntities" in TEMPLATE_ENHANCER_SCRIPT
+        assert "return decodeHtmlEntities(" in TEMPLATE_ENHANCER_SCRIPT
 
 
 # ---------------------------------------------------------------------------
