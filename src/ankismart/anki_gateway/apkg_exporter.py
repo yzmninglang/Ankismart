@@ -54,6 +54,14 @@ _CHOICE_FORMATTER_SCRIPT = """
     );
   }
 
+  function hasRichHtml(html) {
+    var source = String(html || "");
+    var withoutBreak = source.replace(/<br\\s*\\/?>/gi, "").trim();
+    var tags = '<(?:img|audio|video|svg|math|table|thead|tbody|tr|td|th|' +
+      'ul|ol|li|blockquote)\\\\b';
+    return new RegExp(tags, "i").test(withoutBreak);
+  }
+
   function formatWithBreaks(text) {
     var raw = String(text || "");
     if (!raw) {
@@ -284,6 +292,9 @@ _CHOICE_FORMATTER_SCRIPT = """
     var answerEl = document.getElementById(answerId);
     var explanationEl = document.getElementById(explanationId);
     if (!answerEl || !explanationEl) {
+      return;
+    }
+    if (hasRichHtml(answerEl.innerHTML) || hasRichHtml(explanationEl.innerHTML)) {
       return;
     }
     var parsed = parseBack(toText(answerEl.innerHTML));

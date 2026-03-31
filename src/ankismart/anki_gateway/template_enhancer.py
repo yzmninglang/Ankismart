@@ -37,6 +37,14 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     );
   }
 
+  function isRichHtml(html) {
+    var source = String(html || "");
+    var withoutBreak = source.replace(/<br\s*\/?>/gi, "").trim();
+    var tags = '<(?:img|audio|video|svg|math|table|thead|tbody|tr|td|th|' +
+           'ul|ol|li|blockquote)\\b';
+    return new RegExp(tags, "i").test(withoutBreak);
+  }
+
   function escapeRegExp(text) {
     return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
@@ -118,6 +126,64 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     return escaped;
   }
 
+  function sanitizeImageSrc(rawSrc) {
+    var src = String(rawSrc || "").trim();
+    if (!src) {
+      return "";
+    }
+    if (/^<.+>$/.test(src)) {
+      src = src.slice(1, -1).trim();
+    }
+    if (/^\s*javascript\s*:/i.test(src)) {
+      return "";
+    }
+    return src;
+  }
+
+  function renderTextWithMarkdownImages(text) {
+    var raw = String(text || "");
+    if (!raw) {
+      return "";
+    }
+
+    var imageRe = /!\[([^\]]*)\]\(([^)\n]+)\)/g;
+    var out = "";
+    var last = 0;
+    var m;
+
+    while ((m = imageRe.exec(raw)) !== null) {
+      out += escapeHtml(raw.slice(last, m.index)).replace(/\n/g, "<br>");
+
+      var alt = String(m[1] || "");
+      var payload = String(m[2] || "").trim();
+      var src = payload;
+      var title = "";
+      var titleMatch = payload.match(/^(.*?)(?:\s+(?:"([^"]*)"|'([^']*)'))\s*$/);
+      if (titleMatch) {
+        src = titleMatch[1];
+        title = titleMatch[2] || titleMatch[3] || "";
+      }
+
+      src = sanitizeImageSrc(src);
+      if (!src) {
+        out += escapeHtml(m[0]).replace(/\n/g, "<br>");
+      } else {
+        out +=
+          '<img src="' +
+          escapeHtml(src) +
+          '" alt="' +
+          escapeHtml(alt) +
+          '"' +
+          (title ? ' title="' + escapeHtml(title) + '"' : "") +
+          ' data-as-md-image="1">';
+      }
+      last = imageRe.lastIndex;
+    }
+
+    out += escapeHtml(raw.slice(last)).replace(/\n/g, "<br>");
+    return out;
+  }
+
   function renderInlineCodeAndBreaks(text) {
     var raw = String(text || "");
     if (!raw) {
@@ -130,7 +196,7 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     var m;
 
     while ((m = inlineCodeRe.exec(raw)) !== null) {
-      out += escapeHtml(raw.slice(last, m.index)).replace(/\n/g, "<br>");
+      out += renderTextWithMarkdownImages(raw.slice(last, m.index));
       var lang = detectCodeLanguage("", m[1]);
       out +=
         '<code class="as-code as-inline-code as-lang-' +
@@ -143,7 +209,7 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
       last = inlineCodeRe.lastIndex;
     }
 
-    out += escapeHtml(raw.slice(last)).replace(/\n/g, "<br>");
+    out += renderTextWithMarkdownImages(raw.slice(last));
     return out;
   }
 
@@ -182,6 +248,15 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
       return { answer: UNLABELED_ANSWER, explanation: "" };
     }
 
+    function isAnswerLabel(label) {
+      return (
+        label === "answer" ||
+        label === "ans" ||
+        label === "\u7b54\u6848" ||
+        label === "\u6b63\u786e\u7b54\u6848"
+      );
+    }
+
     var markers = [];
     var markerRe = new RegExp(
     '(\\u7B54\\u6848|\\u6B63\\u786E\\u7B54\\u6848|\\u89E3\\u6790|' +
@@ -190,13 +265,8 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     var marker;
     while ((marker = markerRe.exec(text)) !== null) {
       var label = String(marker[1] || "").toLowerCase();
-      var isAnswer =
-        label === "answer" ||
-        label === "ans" ||
-        label === "\u7b54\u6848" ||
-        label === "\u6b63\u786e\u7b54\u6848";
       markers.push({
-        type: isAnswer ? "answer" : "explanation",
+        type: isAnswerLabel(label) ? "answer" : "explanation",
         start: marker.index,
         valueStart: markerRe.lastIndex,
       });
@@ -236,6 +306,68 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     return { answer: answer, explanation: explanation };
   }
 
+  function parseAnswerExplanationHtml(rawHtml) {
+    var html = String(rawHtml || "").trim();
+    if (!html) {
+      return { answerHtml: "", explanationHtml: "" };
+    }
+
+    function isAnswerLabel(label) {
+      return (
+        label === "answer" ||
+        label === "ans" ||
+        label === "\u7b54\u6848" ||
+        label === "\u6b63\u786e\u7b54\u6848"
+      );
+    }
+
+    var markers = [];
+    var markerRe = new RegExp(
+      '(\\u7B54\\u6848|\\u6B63\\u786E\\u7B54\\u6848|\\u89E3\\u6790|' +
+      'answer|ans|explanation|explain)\\s*[:\\uFF1A]',
+      "gi"
+    );
+    var marker;
+    while ((marker = markerRe.exec(html)) !== null) {
+      var label = String(marker[1] || "").toLowerCase();
+      markers.push({
+        type: isAnswerLabel(label) ? "answer" : "explanation",
+        start: marker.index,
+        valueStart: markerRe.lastIndex,
+      });
+    }
+
+    if (!markers.length) {
+      return { answerHtml: html, explanationHtml: "" };
+    }
+
+    var answerParts = [];
+    var explainParts = [];
+
+    var prefix = html.slice(0, markers[0].start).trim();
+    if (prefix) {
+      answerParts.push(prefix);
+    }
+
+    for (var i = 0; i < markers.length; i++) {
+      var end = i + 1 < markers.length ? markers[i + 1].start : html.length;
+      var seg = html.slice(markers[i].valueStart, end).trim();
+      if (!seg) {
+        continue;
+      }
+      if (markers[i].type === "answer") {
+        answerParts.push(seg);
+      } else {
+        explainParts.push(seg);
+      }
+    }
+
+    return {
+      answerHtml: answerParts.join("<br>").trim(),
+      explanationHtml: explainParts.join("<br>").trim(),
+    };
+  }
+
   function looksLikeEmptyExplanation(text) {
     var t = String(text || "").trim();
     if (!t) {
@@ -248,11 +380,7 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
   }
 
   function isRichHtmlNode(node) {
-    var html = String((node && node.innerHTML) || "");
-    var withoutBreak = html.replace(/<br\s*\/?>/gi, "").trim();
-    var tags = '<(?:img|audio|video|svg|math|table|thead|tbody|tr|td|th|' +
-           'ul|ol|li|blockquote)\\b';
-    return new RegExp(tags, 'i').test(withoutBreak);
+    return isRichHtml((node && node.innerHTML) || "");
   }
 
   function enhanceBackBlock() {
@@ -263,10 +391,42 @@ TEMPLATE_ENHANCER_SCRIPT = r"""
     }
 
     var answerValue = answerBlock.querySelector(".as-answer-value");
+    var answerHtmlSource = answerValue
+      ? String(answerValue.innerHTML || "")
+      : String(answerBlock.innerHTML || "");
+    var explainHtmlSource = String(explainBlock.innerHTML || "");
     var answerText = answerValue
       ? extractText(answerValue.innerHTML)
       : extractText(answerBlock.innerHTML);
-    var explainText = extractText(explainBlock.innerHTML);
+    var explainText = extractText(explainHtmlSource);
+
+    if (isRichHtml(answerHtmlSource) || isRichHtml(explainHtmlSource)) {
+      var parsedHtml = parseAnswerExplanationHtml(answerHtmlSource);
+      var answerHtml = parsedHtml.answerHtml;
+      var explanationHtml = parsedHtml.explanationHtml;
+
+      if (!explanationHtml && !looksLikeEmptyExplanation(explainText)) {
+        explanationHtml = explainHtmlSource;
+      }
+      if (!answerHtml) {
+        answerHtml = answerText ? renderRichText(answerText) : UNLABELED_ANSWER;
+      }
+
+      answerBlock.innerHTML =
+        '<div class="as-answer-line">' +
+        '<span class="as-answer-label">' + ANSWER_LABEL + "</span>" +
+        '<span class="as-answer-value">' + answerHtml + "</span>" +
+        "</div>";
+
+      explainBlock.innerHTML =
+        '<div class="as-explain-item">' +
+        (explanationHtml || NO_EXPLANATION) +
+        "</div>";
+
+      answerBlock.setAttribute("data-as-enhanced", "1");
+      explainBlock.setAttribute("data-as-enhanced", "1");
+      return;
+    }
 
     var parsed = parseAnswerExplanation(answerText);
     if (!parsed.explanation && !looksLikeEmptyExplanation(explainText)) {

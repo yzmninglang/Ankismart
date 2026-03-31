@@ -56,6 +56,14 @@ _ANKI_TEMPLATE_FORMATTER_SCRIPT = """
     );
   }
 
+  function hasRichHtml(html) {
+    var source = String(html || "");
+    var withoutBreak = source.replace(/<br\\s*\\/?>/gi, "").trim();
+    var tags = '<(?:img|audio|video|svg|math|table|thead|tbody|tr|td|th|' +
+      'ul|ol|li|blockquote)\\\\b';
+    return new RegExp(tags, "i").test(withoutBreak);
+  }
+
   function formatWithBreaks(text) {
     var raw = String(text || "");
     if (!raw) {
@@ -305,6 +313,9 @@ _ANKI_TEMPLATE_FORMATTER_SCRIPT = """
     if (!answerEl || !explanationEl) {
       return;
     }
+    if (hasRichHtml(answerEl.innerHTML) || hasRichHtml(explanationEl.innerHTML)) {
+      return;
+    }
     var parsed = parseBack(toText(answerEl.innerHTML));
     answerEl.innerHTML =
       '<div class="as-answer-line">' +
@@ -317,6 +328,9 @@ _ANKI_TEMPLATE_FORMATTER_SCRIPT = """
   function formatExplainById(id) {
     var el = document.getElementById(id);
     if (!el) {
+      return;
+    }
+    if (hasRichHtml(el.innerHTML)) {
       return;
     }
     el.innerHTML = renderExplanation(splitExplanation(toText(el.innerHTML)));

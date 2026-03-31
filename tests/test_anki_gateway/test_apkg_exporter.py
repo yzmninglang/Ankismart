@@ -69,6 +69,10 @@ class TestGetModel:
         assert "containsLatex" in _CHOICE_FORMATTER_SCRIPT
         assert "mathRe" in _CHOICE_FORMATTER_SCRIPT
         assert "decodeHtmlEntities" in _CHOICE_FORMATTER_SCRIPT
+        assert "function hasRichHtml" in _CHOICE_FORMATTER_SCRIPT
+        assert "if (hasRichHtml(answerEl.innerHTML) || hasRichHtml(explanationEl.innerHTML))" in (
+            _CHOICE_FORMATTER_SCRIPT
+        )
         assert "var labeled = text.match" in _CHOICE_FORMATTER_SCRIPT
         assert "normalizedLines.length >= 2" not in _CHOICE_FORMATTER_SCRIPT
 

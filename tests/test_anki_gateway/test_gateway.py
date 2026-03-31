@@ -108,12 +108,22 @@ class TestCardToNoteParams:
         assert "containsLatex" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "mathRe" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "decodeHtmlEntities" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
+        assert "function hasRichHtml" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
+        assert "if (hasRichHtml(answerEl.innerHTML) || hasRichHtml(explanationEl.innerHTML))" in (
+            _ANKI_TEMPLATE_FORMATTER_SCRIPT
+        )
         assert "var labeled = text.match" in _ANKI_TEMPLATE_FORMATTER_SCRIPT
         assert "normalizedLines.length >= 2" not in _ANKI_TEMPLATE_FORMATTER_SCRIPT
 
     def test_template_enhancer_decodes_html_entities_before_rendering(self) -> None:
         assert "decodeHtmlEntities" in TEMPLATE_ENHANCER_SCRIPT
         assert "return decodeHtmlEntities(" in TEMPLATE_ENHANCER_SCRIPT
+        assert "parseAnswerExplanationHtml" in TEMPLATE_ENHANCER_SCRIPT
+        assert "isRichHtml(answerHtmlSource) || isRichHtml(explainHtmlSource)" in (
+            TEMPLATE_ENHANCER_SCRIPT
+        )
+        assert "renderTextWithMarkdownImages" in TEMPLATE_ENHANCER_SCRIPT
+        assert 'data-as-md-image="1"' in TEMPLATE_ENHANCER_SCRIPT
 
 
 # ---------------------------------------------------------------------------
