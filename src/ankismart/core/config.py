@@ -149,6 +149,7 @@ class AppConfig(BaseModel):
     # Experimental features
     enable_auto_split: bool = False  # Experimental: Auto-split long documents
     split_threshold: int = 70000  # Character count threshold for splitting
+    markdown_image_qa_enabled: bool = False  # Image-aware QA mode for markdown image links
 
     # Performance statistics
     total_files_processed: int = 0

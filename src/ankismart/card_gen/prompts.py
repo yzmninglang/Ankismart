@@ -14,6 +14,16 @@ _CODE_FORMAT_RULES = (
     "- Never output raw code without backticks/fenced blocks\n"
 )
 
+MARKDOWN_IMAGE_QA_PROMPT_EXTENSION = (
+    "\n"
+    "Image QA mode (for Markdown images):\n"
+    "- Preserve all existing output rules above\n"
+    "- If the input contains Markdown or HTML image links, create at least one card per image\n"
+    "- Use nearby context around each image to form meaningful questions\n"
+    "- Keep each original image URL unchanged in output, and include it in Front or Back/Explanation\n"
+    "- Image links can appear in question, answer, or explanation fields\n"
+)
+
 BASIC_SYSTEM_PROMPT = (
     "You are an expert flashcard creator. Given Markdown content, "
     "extract the most important concepts and create question-answer "

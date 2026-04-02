@@ -771,6 +771,42 @@ def test_batch_generate_worker_zero_concurrency_uses_document_count(monkeypatch)
     assert captured["max_workers"] == len(docs)
 
 
+def test_batch_generate_worker_passes_markdown_image_qa_flag(monkeypatch) -> None:
+    doc = ConvertedDocument(
+        result=MarkdownResult(
+            content="![fig](https://example.com/fig.png)\ntext",
+            source_path="a.md",
+            source_format="markdown",
+            trace_id="trace-image-qa-flag",
+        ),
+        file_name="a.md",
+    )
+    captured_flags: list[bool] = []
+
+    def _capture_generate(_self, request):
+        captured_flags.append(bool(getattr(request, "enable_markdown_image_qa", False)))
+        return [CardDraft(fields={"Front": "Q", "Back": "A"}, note_type="Basic")]
+
+    monkeypatch.setattr("ankismart.ui.workers.CardGenerator.generate", _capture_generate)
+
+    worker = BatchGenerateWorker(
+        documents=[doc],
+        generation_config={
+            "target_total": 1,
+            "strategy_mix": [{"strategy": "basic", "ratio": 1}],
+            "markdown_image_qa_enabled": True,
+        },
+        llm_client=object(),
+        deck_name="Default",
+        tags=[],
+    )
+
+    worker.run()
+
+    assert captured_flags
+    assert all(captured_flags)
+
+
 def test_batch_generate_worker_estimates_auto_target_total_from_document_size() -> None:
     docs = [
         ConvertedDocument(

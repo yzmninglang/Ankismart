@@ -135,6 +135,7 @@ def make_page():
         ("basic", DummySlider(100), None),
     ]
     page._auto_target_count_switch = DummySwitch(True)
+    page._markdown_image_qa_switch = DummySwitch(False)
     page._total_count_input = DummyLineEdit("20")
     page._total_count_mode_combo = DummyModeCombo("auto")
     page._deck_combo = DummyCombo("Default")

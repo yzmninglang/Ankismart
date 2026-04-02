@@ -12,6 +12,7 @@ from ankismart.card_gen.prompts import (
     CONCEPT_SYSTEM_PROMPT,
     IMAGE_QA_SYSTEM_PROMPT,
     KEY_TERMS_SYSTEM_PROMPT,
+    MARKDOWN_IMAGE_QA_PROMPT_EXTENSION,
     MULTIPLE_CHOICE_SYSTEM_PROMPT,
     OCR_CORRECTION_PROMPT,
     SINGLE_CHOICE_SYSTEM_PROMPT,
@@ -40,6 +41,11 @@ _STRATEGY_ALIASES = {
 }
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp"}
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)\n]+)\)")
+_HTML_IMAGE_RE = re.compile(
+    r"<img\s+[^>]*src\s*=\s*['\"]([^'\"]+)['\"][^>]*>",
+    re.IGNORECASE,
+)
 
 
 class CardGenerator:
@@ -293,6 +299,184 @@ class CardGenerator:
 
         return chunks
 
+    @staticmethod
+    def _normalize_markdown_image_target(raw_target: str) -> str:
+        target = str(raw_target or "").strip()
+        if not target:
+            return ""
+        if target.startswith("<") and target.endswith(">"):
+            target = target[1:-1].strip()
+        title_match = re.match(r'^(.*?)(?:\s+(?:"[^"]*"|\'[^\']*\'))\s*$', target)
+        if title_match:
+            target = str(title_match.group(1) or "").strip()
+        return target
+
+    @staticmethod
+    def _extract_markdown_images(markdown: str) -> list[dict[str, str]]:
+        text = str(markdown or "")
+        if not text:
+            return []
+
+        images: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def _context_for(start: int, end: int) -> str:
+            left = max(0, start - 180)
+            right = min(len(text), end + 180)
+            snippet = text[left:right]
+            return re.sub(r"\s+", " ", snippet).strip()
+
+        for match in _MARKDOWN_IMAGE_RE.finditer(text):
+            alt = str(match.group(1) or "").strip()
+            src = CardGenerator._normalize_markdown_image_target(match.group(2))
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            images.append(
+                {
+                    "src": src,
+                    "alt": alt,
+                    "context": _context_for(match.start(), match.end()),
+                }
+            )
+
+        for match in _HTML_IMAGE_RE.finditer(text):
+            src = CardGenerator._normalize_markdown_image_target(match.group(1))
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            images.append(
+                {
+                    "src": src,
+                    "alt": "",
+                    "context": _context_for(match.start(), match.end()),
+                }
+            )
+
+        return images
+
+    @staticmethod
+    def _build_image_requirements_addendum(images: list[dict[str, str]]) -> str:
+        if not images:
+            return ""
+
+        lines = [
+            "",
+            "Image requirements (must follow):",
+            "- Create at least one card for each image below.",
+            "- Keep each image URL unchanged and include it in Front or Back/Explanation.",
+        ]
+        for idx, image in enumerate(images, 1):
+            src = str(image.get("src", "")).strip()
+            alt = str(image.get("alt", "")).strip()
+            context = str(image.get("context", "")).strip()
+            lines.append(f"Image {idx}:")
+            lines.append(f"- URL: {src}")
+            if alt:
+                lines.append(f"- Alt: {alt}")
+            if context:
+                lines.append(f"- Context: {context[:280]}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _draft_contains_image_url(draft: CardDraft, image_url: str) -> bool:
+        marker = str(image_url or "").strip()
+        if not marker:
+            return False
+        for value in draft.fields.values():
+            if marker in str(value or ""):
+                return True
+        return False
+
+    @staticmethod
+    def _build_markdown_image_fallback_card(
+        *,
+        image: dict[str, str],
+        deck_name: str,
+        note_type: str,
+        tags: list[str],
+        trace_id: str,
+        is_zh: bool,
+    ) -> CardDraft:
+        src = str(image.get("src", "")).strip()
+        alt = str(image.get("alt", "")).strip()
+        context = str(image.get("context", "")).strip()
+        hint = alt or (context[:24] if context else ("图示内容" if is_zh else "image content"))
+        context_line = context[:280] if context else ("请结合原文上下文理解图示信息。" if is_zh else "Review this image with nearby context from the source markdown.")
+
+        if (note_type or "").startswith("Cloze"):
+            text = (
+                f"根据图片回忆关键信息：{{{{c1::{hint}}}}}\n![image]({src})"
+                if is_zh
+                else f"Recall the key point from the image: {{{{c1::{hint}}}}}\n![image]({src})"
+            )
+            extra = (
+                f"图片链接：![image]({src})\n解析：{context_line}"
+                if is_zh
+                else f"Image link: ![image]({src})\nExplanation: {context_line}"
+            )
+            fields: dict[str, str] = {"Text": text, "Extra": extra}
+        else:
+            front = (
+                f"根据下图，{hint}的关键点是什么？\n![image]({src})"
+                if is_zh
+                else f"Based on the image, what is the key point of {hint}?\n![image]({src})"
+            )
+            back = (
+                f"答案: 请结合图示与上下文作答。\n解析:\n{context_line}\n![image]({src})"
+                if is_zh
+                else (
+                    "Answer: Use the image and nearby context.\n"
+                    f"Explanation:\n{context_line}\n![image]({src})"
+                )
+            )
+            fields = {"Front": front, "Back": back}
+
+        return CardDraft(
+            trace_id=trace_id,
+            deck_name=deck_name,
+            note_type=note_type,
+            fields=fields,
+            tags=tags,
+        )
+
+    def _ensure_image_cards_coverage(
+        self,
+        *,
+        drafts: list[CardDraft],
+        images: list[dict[str, str]],
+        deck_name: str,
+        note_type: str,
+        tags: list[str],
+        trace_id: str,
+        markdown: str,
+    ) -> list[CardDraft]:
+        if not images:
+            return drafts
+
+        is_zh = bool(re.search(r"[\u4e00-\u9fff]", markdown or ""))
+        missing = [
+            image
+            for image in images
+            if not any(self._draft_contains_image_url(draft, image.get("src", "")) for draft in drafts)
+        ]
+        if not missing:
+            return drafts
+
+        for image in missing:
+            drafts.append(
+                self._build_markdown_image_fallback_card(
+                    image=image,
+                    deck_name=deck_name,
+                    note_type=note_type,
+                    tags=tags or ["ankismart"],
+                    trace_id=trace_id,
+                    is_zh=is_zh,
+                )
+            )
+
+        return drafts
+
     def generate(self, request: GenerateRequest) -> list[CardDraft]:
         with trace_context(request.trace_id or None) as trace_id:
             with timed("card_generate_total"):
@@ -305,12 +489,27 @@ class CardGenerator:
                 base_system_prompt, note_type = strategy_info
                 markdown = request.markdown
                 auto_target_count = bool(getattr(request, "auto_target_count", False))
+                image_mode = bool(getattr(request, "enable_markdown_image_qa", False))
+                images = self._extract_markdown_images(markdown) if image_mode else []
+                effective_target_count = int(request.target_count or 0)
+                if images:
+                    if effective_target_count <= 0:
+                        effective_target_count = len(images)
+                    else:
+                        effective_target_count = max(effective_target_count, len(images))
 
                 system_prompt = base_system_prompt
+                if image_mode:
+                    system_prompt += MARKDOWN_IMAGE_QA_PROMPT_EXTENSION
                 system_prompt += self._build_target_instruction(
-                    request.target_count,
+                    effective_target_count,
                     auto_target_count=auto_target_count,
                 )
+                user_prompt = markdown
+                if images:
+                    user_prompt = (
+                        f"{markdown}\n{self._build_image_requirements_addendum(images)}"
+                    )
 
                 logger.info(
                     "Generating cards",
@@ -320,6 +519,9 @@ class CardGenerator:
                         "note_type": note_type,
                         "content_length": len(markdown),
                         "target_count": request.target_count,
+                        "effective_target_count": effective_target_count,
+                        "markdown_image_count": len(images),
+                        "markdown_image_qa": image_mode,
                         "trace_id": trace_id,
                     },
                 )
@@ -333,7 +535,7 @@ class CardGenerator:
                 if enable_split and len(markdown) > split_threshold:
                     # Split document into chunks
                     chunks = self._split_markdown(markdown, split_threshold)
-                    remaining_target = max(0, request.target_count)
+                    remaining_target = max(0, effective_target_count)
 
                     logger.info(
                         "Processing document in chunks",
@@ -362,12 +564,22 @@ class CardGenerator:
                         )
 
                         chunk_system_prompt = base_system_prompt
+                        if image_mode:
+                            chunk_system_prompt += MARKDOWN_IMAGE_QA_PROMPT_EXTENSION
+                        chunk_images = self._extract_markdown_images(chunk) if image_mode else []
+                        chunk_user_prompt = chunk
+                        if chunk_images:
+                            chunk_user_prompt = (
+                                f"{chunk}\n{self._build_image_requirements_addendum(chunk_images)}"
+                            )
                         chunk_target = 0
                         if remaining_target > 0:
                             chunks_left = len(chunks) - i + 1
                             base_target = remaining_target // max(1, chunks_left)
                             extra_target = 1 if remaining_target % max(1, chunks_left) else 0
                             chunk_target = max(1, base_target + extra_target)
+                            if chunk_images:
+                                chunk_target = max(chunk_target, len(chunk_images))
                             chunk_system_prompt += self._build_target_instruction(
                                 chunk_target,
                                 auto_target_count=auto_target_count,
@@ -384,7 +596,7 @@ class CardGenerator:
                         with timed(f"llm_generate_chunk_{i}"):
                             raw_output = self._chat_with_timeout(
                                 chunk_system_prompt,
-                                chunk,
+                                chunk_user_prompt,
                                 timeout=request_timeout,
                             )
 
@@ -424,7 +636,7 @@ class CardGenerator:
                     with timed("llm_generate"):
                         raw_output = self._chat_with_timeout(
                             system_prompt,
-                            markdown,
+                            user_prompt,
                             timeout=request_timeout,
                         )
 
@@ -438,16 +650,27 @@ class CardGenerator:
                         trace_id=trace_id,
                     )
 
+                if image_mode and images:
+                    drafts = self._ensure_image_cards_coverage(
+                        drafts=drafts,
+                        images=images,
+                        deck_name=request.deck_name,
+                        note_type=note_type,
+                        tags=request.tags or ["ankismart"],
+                        trace_id=trace_id,
+                        markdown=markdown,
+                    )
+
                 # Attach source image for image-based strategy
                 if normalized_strategy in {"image_qa", "image_occlusion"} and request.source_path:
                     self._attach_image(drafts, request.source_path)
 
                 if (
-                    request.target_count > 0
+                    effective_target_count > 0
                     and not auto_target_count
-                    and len(drafts) > request.target_count
+                    and len(drafts) > effective_target_count
                 ):
-                    drafts = drafts[: request.target_count]
+                    drafts = drafts[:effective_target_count]
 
                 logger.info(
                     "Card generation completed",

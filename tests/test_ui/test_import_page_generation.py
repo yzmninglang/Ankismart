@@ -29,6 +29,7 @@ def test_build_generation_config_single_mode() -> None:
     assert config["mode"] == "mixed"
     assert config["target_total"] == 20
     assert config["auto_target_count"] is True
+    assert config["markdown_image_qa_enabled"] is False
     assert config["strategy_mix"] == [{"strategy": "basic", "ratio": 100}]
 
 
@@ -48,10 +49,20 @@ def test_build_generation_config_mixed_mode() -> None:
     assert config["mode"] == "mixed"
     assert config["target_total"] == 30
     assert config["auto_target_count"] is False
+    assert config["markdown_image_qa_enabled"] is False
     assert config["strategy_mix"] == [
         {"strategy": "basic", "ratio": 50},
         {"strategy": "cloze", "ratio": 30},
     ]
+
+
+def test_build_generation_config_with_markdown_image_qa_enabled() -> None:
+    page = make_page()
+    page._markdown_image_qa_switch = DummySwitch(True)
+
+    config = ImportPage.build_generation_config(page)
+
+    assert config["markdown_image_qa_enabled"] is True
 
 
 def test_on_decks_loaded_restores_last_deck_choice():

@@ -233,6 +233,7 @@ class GenerateWorker(QThread):
         strategy: str,
         target_count: int = 0,
         auto_target_count: bool = False,
+        enable_markdown_image_qa: bool = False,
     ) -> None:
         super().__init__()
         self._generator = generator
@@ -242,6 +243,7 @@ class GenerateWorker(QThread):
         self._strategy = strategy
         self._target_count = target_count
         self._auto_target_count = auto_target_count
+        self._enable_markdown_image_qa = enable_markdown_image_qa
         self._cancelled = False
         self._cancel_event = threading.Event()
 
@@ -275,6 +277,7 @@ class GenerateWorker(QThread):
                 source_path=self._markdown_result.source_path,
                 target_count=self._target_count,
                 auto_target_count=self._auto_target_count,
+                enable_markdown_image_qa=self._enable_markdown_image_qa,
             )
 
             cards = self._generator.generate(request)
@@ -1077,6 +1080,9 @@ class BatchGenerateWorker(QThread):
             # Extract configuration
             target_total = self._generation_config.get("target_total", 20)
             auto_target_count = bool(self._generation_config.get("auto_target_count", False))
+            markdown_image_qa_enabled = bool(
+                self._generation_config.get("markdown_image_qa_enabled", False)
+            )
             strategy_mix = self._generation_config.get("strategy_mix", [])
             configured_workers = getattr(self._config, "llm_concurrency", 2) if self._config else 2
             try:
@@ -1100,6 +1106,7 @@ class BatchGenerateWorker(QThread):
                     "documents_count": len(self._documents),
                     "target_total": target_total,
                     "auto_target_count": auto_target_count,
+                    "markdown_image_qa_enabled": markdown_image_qa_enabled,
                     "max_workers": max_workers,
                 },
             )
@@ -1196,6 +1203,7 @@ class BatchGenerateWorker(QThread):
                                 auto_target_count=auto_target_count,
                                 enable_auto_split=self._enable_auto_split,
                                 split_threshold=self._split_threshold,
+                                enable_markdown_image_qa=markdown_image_qa_enabled,
                             )
                             round_cards = generator.generate(request)
                         except Exception as e:

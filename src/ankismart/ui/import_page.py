@@ -848,6 +848,25 @@ class ImportPage(ProgressMixin, QWidget):
         self._count_card.setMaximumHeight(_RIGHT_OPTION_CARD_MAX_HEIGHT)
         group_layout.addWidget(self._count_card)
 
+        self._image_qa_card = SettingCard(
+            FluentIcon.LABEL,
+            "图片问答增强" if is_zh else "Image QA Boost",
+            "检测 Markdown 图片并按上下文为每张图生成题目" if is_zh else "Create one QA card per markdown image with context",
+            group,
+        )
+        self._markdown_image_qa_switch = SwitchButton(self._image_qa_card)
+        self._markdown_image_qa_switch.setOnText("开启" if is_zh else "On")
+        self._markdown_image_qa_switch.setOffText("关闭" if is_zh else "Off")
+        self._markdown_image_qa_switch.setChecked(
+            bool(getattr(self._main.config, "markdown_image_qa_enabled", False))
+        )
+        self._markdown_image_qa_switch.checkedChanged.connect(self._on_markdown_image_qa_changed)
+        self._image_qa_card.hBoxLayout.addWidget(self._markdown_image_qa_switch)
+        self._image_qa_card.hBoxLayout.addSpacing(16)
+        self._image_qa_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._image_qa_card.setMaximumHeight(_RIGHT_OPTION_CARD_MAX_HEIGHT)
+        group_layout.addWidget(self._image_qa_card)
+
         # Mode combo (for test compatibility)
         self._total_count_mode_combo = ComboBox()
         self._total_count_mode_combo.addItem("auto")
@@ -1513,6 +1532,18 @@ class ImportPage(ProgressMixin, QWidget):
         if total_count_input is not None and hasattr(total_count_input, "setEnabled"):
             total_count_input.setEnabled(not checked)
 
+    def _is_markdown_image_qa_enabled(self) -> bool:
+        switch = self.__dict__.get("_markdown_image_qa_switch")
+        if switch is not None and hasattr(switch, "isChecked"):
+            try:
+                return bool(switch.isChecked())
+            except Exception:
+                pass
+        return bool(getattr(self._main.config, "markdown_image_qa_enabled", False))
+
+    def _on_markdown_image_qa_changed(self, checked: bool) -> None:
+        self._main.config.markdown_image_qa_enabled = bool(checked)
+
     def _validate_tags(self, tags_str: str) -> tuple[bool, str | None]:
         """Validate tags format.
 
@@ -1799,6 +1830,7 @@ class ImportPage(ProgressMixin, QWidget):
         # Save last used values
         self._main.config.last_deck = deck_name
         self._main.config.last_tags = self._tags_input.text()
+        self._main.config.markdown_image_qa_enabled = self._is_markdown_image_qa_enabled()
         save_config(self._main.config)
 
         # Start worker
@@ -2043,6 +2075,7 @@ class ImportPage(ProgressMixin, QWidget):
             "mode": "mixed",
             "target_total": target_total,
             "auto_target_count": auto_target_count,
+            "markdown_image_qa_enabled": self._is_markdown_image_qa_enabled(),
             "strategy_mix": strategy_mix,
         }
 

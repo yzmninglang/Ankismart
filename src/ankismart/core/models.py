@@ -112,6 +112,7 @@ class GenerateRequest(BaseModel):
     auto_target_count: bool = False  # Let AI adapt count while keeping target_count as soft hint
     enable_auto_split: bool = False  # Experimental: Enable auto-split for long documents
     split_threshold: int = 70000  # Character count threshold for splitting
+    enable_markdown_image_qa: bool = False  # Require image-aware QA for markdown image links
 
 
 # ---------------------------------------------------------------------------

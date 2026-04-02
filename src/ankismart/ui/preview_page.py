@@ -812,13 +812,22 @@ class PreviewPage(ProgressMixin, QWidget):
             finished = pyqtSignal(list)
             error = pyqtSignal(str)
 
-            def __init__(self, document, strategies, llm_client, deck_name, tags):
+            def __init__(
+                self,
+                document,
+                strategies,
+                llm_client,
+                deck_name,
+                tags,
+                enable_markdown_image_qa: bool,
+            ):
                 super().__init__()
                 self.document = document
                 self.strategies = strategies
                 self.llm_client = llm_client
                 self.deck_name = deck_name
                 self.tags = tags
+                self.enable_markdown_image_qa = enable_markdown_image_qa
 
             def run(self):
                 try:
@@ -841,6 +850,7 @@ class PreviewPage(ProgressMixin, QWidget):
                             trace_id=self.document.result.trace_id,
                             source_path=self.document.result.source_path,
                             target_count=1,  # Only 1 card per strategy
+                            enable_markdown_image_qa=self.enable_markdown_image_qa,
                         )
 
                         cards = generator.generate(request)
@@ -872,7 +882,12 @@ class PreviewPage(ProgressMixin, QWidget):
             # Start worker and prevent duplicate sample requests.
             self._cleanup_sample_worker()
             self._sample_worker = SampleGenerateWorker(
-                document, strategy_mix, llm_client, deck_name, tags
+                document,
+                strategy_mix,
+                llm_client,
+                deck_name,
+                tags,
+                bool(generation_config.get("markdown_image_qa_enabled", False)),
             )
             self._sample_worker.finished.connect(self._on_sample_finished)
             self._sample_worker.error.connect(self._on_sample_error)

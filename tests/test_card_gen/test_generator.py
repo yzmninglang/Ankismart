@@ -11,6 +11,7 @@ from ankismart.card_gen.prompts import (
     BASIC_SYSTEM_PROMPT,
     CLOZE_SYSTEM_PROMPT,
     IMAGE_QA_SYSTEM_PROMPT,
+    MARKDOWN_IMAGE_QA_PROMPT_EXTENSION,
     MULTIPLE_CHOICE_SYSTEM_PROMPT,
     OCR_CORRECTION_PROMPT,
     SINGLE_CHOICE_SYSTEM_PROMPT,
@@ -248,6 +249,37 @@ class TestCardGeneratorGenerate:
         gen._llm.chat.assert_called_once()
         call_args = gen._llm.chat.call_args[0]
         assert call_args[1] == "My special content"
+
+    def test_markdown_image_qa_mode_uses_extended_prompt_and_keeps_image_links(self):
+        prompts: list[str] = []
+
+        def _fake_llm(system_prompt: str, user_prompt: str, timeout: float | None = None) -> str:
+            prompts.append(system_prompt)
+            return json.dumps([{"Front": "Q1", "Back": "A1"}])
+
+        gen = _make_generator(chat_side_effect=_fake_llm)
+        request = GenerateRequest(
+            markdown=(
+                "流程图说明\n"
+                "![img1](https://cdn.example.com/a.png)\n"
+                "补充说明\n"
+                '<img src="https://cdn.example.com/b.png">'
+            ),
+            strategy="basic",
+            deck_name="Deck",
+            enable_markdown_image_qa=True,
+        )
+
+        drafts = gen.generate(request)
+
+        assert prompts
+        assert MARKDOWN_IMAGE_QA_PROMPT_EXTENSION.strip() in prompts[0]
+        merged_fields = " ".join(
+            str(value or "") for draft in drafts for value in draft.fields.values()
+        )
+        assert "https://cdn.example.com/a.png" in merged_fields
+        assert "https://cdn.example.com/b.png" in merged_fields
+        assert len(drafts) >= 2
 
 
 # ---------------------------------------------------------------------------
